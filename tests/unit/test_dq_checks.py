@@ -90,17 +90,18 @@ def _setup_lnd_loan(conn, rows: List[dict]):
 def _setup_lnd_payment(conn, rows: List[dict]):
     conn.execute("""
         CREATE TABLE IF NOT EXISTS hlx_dev_lnd.lnd_payment (
-            payment_id      VARCHAR,
-            loan_id         VARCHAR,
-            amount          DECIMAL(18,2),
+            lnd_payment_sk    BIGINT,
+            payment_id        VARCHAR,
+            loan_id           VARCHAR,
+            amount            DECIMAL(18,2),
             payment_timestamp TIMESTAMPTZ,
-            _last_updated_ts TIMESTAMP
+            _last_updated_ts  TIMESTAMP
         )
     """)
-    for r in rows:
+    for i, r in enumerate(rows, start=1):
         conn.execute(
-            "INSERT INTO hlx_dev_lnd.lnd_payment VALUES (?,?,?,?,?)",
-            [r.get("payment_id"), r.get("loan_id"), r.get("amount"),
+            "INSERT INTO hlx_dev_lnd.lnd_payment VALUES (?,?,?,?,?,?)",
+            [i, r.get("payment_id"), r.get("loan_id"), r.get("amount"),
              r.get("ts", datetime.now(timezone.utc)),
              r.get("ts", datetime.now(timezone.utc))]
         )
@@ -265,35 +266,76 @@ class TestUniqueness:
         """).fetchone()[0]
         assert dup_count == 0
 
-    def test_duplicate_payment_id_detected(self, conn):
-        _setup_lnd_payment(conn, [
-            {"payment_id": "P001", "loan_id": "L001", "amount": 100},
-            {"payment_id": "P001", "loan_id": "L001", "amount": 100},
-            {"payment_id": "P002", "loan_id": "L001", "amount": 200},
-        ])
-        dup_count = conn.execute("""
+    def test_true_duplicate_payment_detected(self, conn):
+        """Same payment_id + amount + timestamp = true duplicate → breach."""
+        from datetime import datetime, timezone
+        ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
+        # Insert two rows with identical composite key manually
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS hlx_dev_lnd.lnd_payment (
+                lnd_payment_sk BIGINT, payment_id VARCHAR, loan_id VARCHAR,
+                amount DECIMAL(18,2), payment_timestamp TIMESTAMPTZ
+            )""")
+        conn.execute("INSERT INTO hlx_dev_lnd.lnd_payment VALUES (1, 'P001', 'L001', 100, ?)", [ts])
+        conn.execute("INSERT INTO hlx_dev_lnd.lnd_payment VALUES (2, 'P001', 'L001', 100, ?)", [ts])  # true dup
+        conn.execute("INSERT INTO hlx_dev_lnd.lnd_payment VALUES (3, 'P002', 'L001', 200, ?)", [ts])
+        true_dups = conn.execute("""
             SELECT COUNT(*) FROM (
-                SELECT payment_id, COUNT(*) AS cnt
+                SELECT payment_id,
+                       CAST(amount AS VARCHAR),
+                       CAST(payment_timestamp AS VARCHAR),
+                       COUNT(*) c
                 FROM hlx_dev_lnd.lnd_payment
-                GROUP BY payment_id HAVING cnt > 1
+                GROUP BY payment_id,
+                         CAST(amount AS VARCHAR),
+                         CAST(payment_timestamp AS VARCHAR)
+                HAVING c > 1
             )
         """).fetchone()[0]
-        assert dup_count == 1
+        assert true_dups == 1
 
-    def test_unique_payment_ids_pass(self, conn):
+    def test_split_settlement_not_flagged_as_duplicate(self, conn):
+        """Same payment_id, different amount = split settlement → NOT a breach."""
+        _setup_lnd_payment(conn, [
+            {"payment_id": "P001", "loan_id": "L001", "amount": 60},   # leg 1
+            {"payment_id": "P001", "loan_id": "L001", "amount": 40},   # leg 2
+            {"payment_id": "P002", "loan_id": "L001", "amount": 200},
+        ])
+        true_dups = conn.execute("""
+            SELECT COUNT(*) FROM (
+                SELECT payment_id,
+                       CAST(amount AS VARCHAR),
+                       CAST(payment_timestamp AS VARCHAR),
+                       COUNT(*) c
+                FROM hlx_dev_lnd.lnd_payment
+                GROUP BY payment_id,
+                         CAST(amount AS VARCHAR),
+                         CAST(payment_timestamp AS VARCHAR)
+                HAVING c > 1
+            )
+        """).fetchone()[0]
+        assert true_dups == 0, "Split settlements must not be flagged as duplicates"
+
+    def test_unique_payment_composite_keys_pass(self, conn):
         _setup_lnd_payment(conn, [
             {"payment_id": "P001", "loan_id": "L001", "amount": 100},
             {"payment_id": "P002", "loan_id": "L001", "amount": 200},
             {"payment_id": "P003", "loan_id": "L002", "amount": 300},
         ])
-        dup_count = conn.execute("""
+        true_dups = conn.execute("""
             SELECT COUNT(*) FROM (
-                SELECT payment_id, COUNT(*) AS cnt
+                SELECT payment_id,
+                       CAST(amount AS VARCHAR),
+                       CAST(payment_timestamp AS VARCHAR),
+                       COUNT(*) c
                 FROM hlx_dev_lnd.lnd_payment
-                GROUP BY payment_id HAVING cnt > 1
+                GROUP BY payment_id,
+                         CAST(amount AS VARCHAR),
+                         CAST(payment_timestamp AS VARCHAR)
+                HAVING c > 1
             )
         """).fetchone()[0]
-        assert dup_count == 0
+        assert true_dups == 0
 
 
 # ---------------------------------------------------------------------------

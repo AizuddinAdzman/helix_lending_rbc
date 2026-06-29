@@ -15,7 +15,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from config import (
-    TBL_RAW_LOAN, TBL_RAW_PAYMENT,
+    TBL_RAW_LOAN, TBL_RAW_PAYMENT, TBL_RAW_AUDIT,
     TBL_LND_ERR_LOAN, TBL_LND_ERR_PAYMENT, TBL_LND_DQ_AUDIT,
     TBL_LND_LOAN, TBL_LND_PAYMENT,
     TBL_FCT_LOAN, TBL_FCT_PAYMENT,
@@ -62,20 +62,24 @@ def mart_data_observability(context, duckdb_resource: DuckDBResource) -> Output:
         conn.execute(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA_MART}")
         conn.execute(f"""
             CREATE OR REPLACE TABLE {TBL_MART_OBSERVABILITY} (
-                run_date            DATE,
-                source_name         VARCHAR,
-                raw_rows_in_batch   INTEGER,
-                lnd_rows_accepted   INTEGER,
-                lnd_rows_rejected   INTEGER,
-                acceptance_rate_pct DECIMAL(6,2),
-                dq_checks_run       INTEGER,
-                dq_checks_failed    INTEGER,
-                dq_breach_flag      BOOLEAN,
-                fct_rows            INTEGER,
-                latest_batch_ts     TIMESTAMP,
-                freshness_hours     DECIMAL(8,2),
-                pipeline_status     VARCHAR,
-                _last_updated_ts    TIMESTAMP
+                run_date                    DATE,
+                source_name                 VARCHAR,
+                raw_rows_in_batch           INTEGER,
+                raw_distinct_keys           INTEGER,
+                raw_duplicate_key_count     INTEGER,
+                raw_true_duplicate_count    INTEGER,
+                raw_diff_amount_same_id     INTEGER,
+                lnd_rows_accepted           INTEGER,
+                lnd_rows_rejected           INTEGER,
+                acceptance_rate_pct         DECIMAL(6,2),
+                dq_checks_run               INTEGER,
+                dq_checks_failed            INTEGER,
+                dq_breach_flag              BOOLEAN,
+                fct_rows                    INTEGER,
+                latest_batch_ts             TIMESTAMP,
+                freshness_hours             DECIMAL(8,2),
+                pipeline_status             VARCHAR,
+                _last_updated_ts            TIMESTAMP
             )""")
 
         for src in sources:
@@ -111,16 +115,34 @@ def mart_data_observability(context, duckdb_resource: DuckDBResource) -> Output:
 
             status = "FAIL" if dq_f > 0 else "PASS"
 
+            # Pull raw_audit stats for this source
+            audit_row = conn.execute(f"""
+                SELECT distinct_keys, duplicate_key_count,
+                       true_duplicate_count, diff_amount_same_id_count
+                FROM {TBL_RAW_AUDIT}
+                WHERE source_table = '{src["raw"]}'
+                ORDER BY batch_ts DESC LIMIT 1
+            """).fetchone() if _exists(conn, TBL_RAW_AUDIT) else None
+
+            distinct_keys   = audit_row[0] if audit_row else None
+            dup_key_count   = audit_row[1] if audit_row else None
+            true_dup_count  = audit_row[2] if audit_row else None
+            diff_amt_count  = audit_row[3] if audit_row else None
+
             conn.execute(
-                f"INSERT INTO {TBL_MART_OBSERVABILITY} VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                [batch_date_str, src["name"], raw_n, acc, err_n, rate,
+                f"INSERT INTO {TBL_MART_OBSERVABILITY} VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                [batch_date_str, src["name"],
+                 raw_n, distinct_keys, dup_key_count, true_dup_count, diff_amt_count,
+                 acc, err_n, rate,
                  dq_t, dq_f, dq_f > 0, fct_n, lt, fh, status, batch_ts],
             )
             log_event(
                 logger, event="checkpoint", layer="mart",
                 table=TBL_MART_OBSERVABILITY,
-                message=(f"source={src['name']}: raw={raw_n}, accepted={acc}, "
-                         f"dq_checks={dq_t}, dq_failed={dq_f}, "
+                message=(f"source={src['name']}: raw={raw_n}, "
+                         f"distinct_keys={distinct_keys}, "
+                         f"true_dups={true_dup_count}, diff_amt_same_id={diff_amt_count}, "
+                         f"accepted={acc}, dq_checks={dq_t}, dq_failed={dq_f}, "
                          f"fct_rows={fct_n}, freshness={fh}h, status={status}"),
                 batch_date=batch_date_str,
             )

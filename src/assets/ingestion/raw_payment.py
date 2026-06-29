@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from config import (
     PAYMENT_FILE, COL_SOURCE_FILE, COL_LAST_UPDATED_TS,
-    TBL_RAW_PAYMENT, TBL_LND_ERR_PAYMENT, SCHEMA_RAW, SCHEMA_LND,
+    TBL_RAW_PAYMENT, TBL_RAW_AUDIT, TBL_LND_ERR_PAYMENT, SCHEMA_RAW, SCHEMA_LND,
 )
 from resources.duckdb_resource import DuckDBResource
 from utils.logger import get_logger, log_event
@@ -122,6 +122,65 @@ def raw_payment(context, duckdb_resource: DuckDBResource) -> Output:
                 bad_rows,
             )
         total = conn.execute(f"SELECT COUNT(*) FROM {TBL_RAW_PAYMENT}").fetchone()[0]
+
+        # ── Write to raw_audit ────────────────────────────────────────────
+        conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS {TBL_RAW_AUDIT} (
+                batch_ts                    TIMESTAMP,
+                source_file                 VARCHAR,
+                source_table                VARCHAR,
+                total_rows_in_file          INTEGER,
+                total_rows_inserted         INTEGER,
+                distinct_keys               INTEGER,
+                duplicate_key_count         INTEGER,
+                true_duplicate_count        INTEGER,
+                diff_amount_same_id_count   INTEGER,
+                _last_updated_ts            TIMESTAMP
+            )""")
+
+        # Count duplicate patterns in this batch
+        dup_stats = conn.execute(f"""
+            SELECT
+                COUNT(DISTINCT payment_id)                          AS distinct_keys,
+                SUM(CASE WHEN cnt > 1 THEN 1 ELSE 0 END)           AS duplicate_key_count,
+                SUM(CASE WHEN true_dup > 0 THEN true_dup ELSE 0 END) AS true_duplicate_count,
+                SUM(CASE WHEN diff_amt > 0 THEN diff_amt ELSE 0 END) AS diff_amount_same_id
+            FROM (
+                SELECT
+                    payment_id,
+                    COUNT(*) AS cnt,
+                    -- true duplicates: same payment_id + amount + timestamp
+                    COUNT(*) - COUNT(DISTINCT amount || '|' || payment_timestamp) AS true_dup,
+                    -- diff amount same id: same payment_id, different amounts
+                    CASE WHEN COUNT(DISTINCT amount) > 1 THEN 1 ELSE 0 END AS diff_amt
+                FROM {TBL_RAW_PAYMENT}
+                WHERE _last_updated_ts = ?
+                GROUP BY payment_id
+            )
+        """, [batch_ts]).fetchone()
+
+        conn.execute(
+            f"INSERT INTO {TBL_RAW_AUDIT} VALUES (?,?,?,?,?,?,?,?,?,?)",
+            [
+                batch_ts, source_file, TBL_RAW_PAYMENT,
+                rows_in, rows_inserted,
+                dup_stats[0],   # distinct_keys
+                dup_stats[1],   # duplicate_key_count
+                dup_stats[2],   # true_duplicate_count
+                dup_stats[3],   # diff_amount_same_id_count
+                batch_ts,
+            ]
+        )
+        log_event(
+            logger, event="checkpoint", layer="raw", table=TBL_RAW_PAYMENT,
+            message=(
+                f"raw_audit written: distinct_payment_ids={dup_stats[0]}, "
+                f"duplicate_key_count={dup_stats[1]}, "
+                f"true_duplicates={dup_stats[2]}, "
+                f"same_id_diff_amount={dup_stats[3]}"
+            ),
+            source_file=source_file, batch_date=batch_date_str,
+        )
 
     duration = round(time.time() - start_time, 3)
     log_event(

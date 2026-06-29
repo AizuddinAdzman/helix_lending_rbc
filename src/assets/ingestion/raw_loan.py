@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from config import (
     LOAN_FILE, COL_SOURCE_FILE, COL_LAST_UPDATED_TS,
-    TBL_RAW_LOAN, SCHEMA_RAW,
+    TBL_RAW_LOAN, TBL_RAW_AUDIT, SCHEMA_RAW,
 )
 from resources.duckdb_resource import DuckDBResource
 from utils.logger import get_logger, log_event
@@ -96,6 +96,57 @@ def raw_loan(context, duckdb_resource: DuckDBResource) -> Output:
             )
             rows_inserted = len(good_rows)
         total = conn.execute(f"SELECT COUNT(*) FROM {TBL_RAW_LOAN}").fetchone()[0]
+
+        # ── Write to raw_audit ────────────────────────────────────────────
+        conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS {TBL_RAW_AUDIT} (
+                batch_ts                    TIMESTAMP,
+                source_file                 VARCHAR,
+                source_table                VARCHAR,
+                total_rows_in_file          INTEGER,
+                total_rows_inserted         INTEGER,
+                distinct_keys               INTEGER,
+                duplicate_key_count         INTEGER,
+                true_duplicate_count        INTEGER,
+                diff_amount_same_id_count   INTEGER,
+                _last_updated_ts            TIMESTAMP
+            )""")
+
+        # Count duplicates in this batch
+        dup_stats = conn.execute(f"""
+            SELECT
+                COUNT(DISTINCT loan_id)                             AS distinct_keys,
+                SUM(CASE WHEN cnt > 1 THEN 1 ELSE 0 END)           AS duplicate_key_count,
+                SUM(CASE WHEN cnt > 1 THEN cnt - 1 ELSE 0 END)     AS true_duplicate_count
+            FROM (
+                SELECT loan_id, COUNT(*) AS cnt
+                FROM {TBL_RAW_LOAN}
+                WHERE _last_updated_ts = ?
+                GROUP BY loan_id
+            )
+        """, [batch_ts]).fetchone()
+
+        conn.execute(
+            f"INSERT INTO {TBL_RAW_AUDIT} VALUES (?,?,?,?,?,?,?,?,?,?)",
+            [
+                batch_ts, source_file, TBL_RAW_LOAN,
+                rows_in, rows_inserted,
+                dup_stats[0],   # distinct_keys
+                dup_stats[1],   # duplicate_key_count
+                dup_stats[2],   # true_duplicate_count
+                0,              # diff_amount_same_id_count (N/A for loans)
+                batch_ts,
+            ]
+        )
+        log_event(
+            logger, event="checkpoint", layer="raw", table=TBL_RAW_LOAN,
+            message=(
+                f"raw_audit written: distinct_loan_ids={dup_stats[0]}, "
+                f"duplicate_key_count={dup_stats[1]}, "
+                f"extra_rows_from_duplicates={dup_stats[2]}"
+            ),
+            source_file=source_file, batch_date=batch_date_str,
+        )
 
     duration = round(time.time() - start_time, 3)
     log_event(

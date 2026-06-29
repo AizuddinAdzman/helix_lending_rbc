@@ -440,6 +440,14 @@ def _create_raw_tables(conn):
     conn.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_raw")
     conn.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_lnd")
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS hlx_dev_raw.raw_audit (
+            batch_ts TIMESTAMP, source_file VARCHAR, source_table VARCHAR,
+            total_rows_in_file INTEGER, total_rows_inserted INTEGER,
+            distinct_keys INTEGER, duplicate_key_count INTEGER,
+            true_duplicate_count INTEGER, diff_amount_same_id_count INTEGER,
+            _last_updated_ts TIMESTAMP
+        )""")
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS hlx_dev_raw.raw_loan (
             loan_id VARCHAR, customer_id VARCHAR, product_type VARCHAR,
             principal_amount VARCHAR, interest_rate VARCHAR, term_months VARCHAR,
@@ -487,6 +495,17 @@ def _ingest_raw_loan(conn, path, batch_ts, source_file):
                     "origination_channel","status","borrower_info"
                 ]] + [source_file, batch_ts]
             )
+
+
+def _write_raw_audit(conn, batch_ts, source_file, source_table,
+                       rows_in, rows_inserted, distinct_keys=0,
+                       dup_key_count=0, true_dup_count=0, diff_amt_count=0):
+    conn.execute(
+        "INSERT INTO hlx_dev_raw.raw_audit VALUES (?,?,?,?,?,?,?,?,?,?)",
+        [batch_ts, source_file, source_table,
+         rows_in, rows_inserted, distinct_keys,
+         dup_key_count, true_dup_count, diff_amt_count, batch_ts]
+    )
 
 
 def _ingest_raw_payment(conn, path, batch_ts, source_file):
@@ -538,6 +557,7 @@ def _create_lnd_tables(conn):
         )""")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS hlx_dev_lnd.lnd_payment (
+            lnd_payment_sk BIGINT,
             payment_id VARCHAR, loan_id VARCHAR,
             amount DECIMAL(18,2), payment_timestamp TIMESTAMPTZ,
             payment_method_type VARCHAR, payment_method_last_four VARCHAR,
@@ -622,6 +642,7 @@ def _transform_lnd_payment(conn, batch_ts):
     ).fetchall()
     cols = [d[0] for d in conn.execute("SELECT * FROM hlx_dev_raw.raw_payment LIMIT 0").description]
 
+    sk = 0
     for row in rows:
         d = dict(zip(cols, row))
         pid = clean_string(d.get("payment_id"))
@@ -636,9 +657,10 @@ def _transform_lnd_payment(conn, batch_ts):
                 list(row) + [str(e), datetime.now(timezone.utc)]
             )
             continue
+        sk += 1
         conn.execute(
-            "INSERT INTO hlx_dev_lnd.lnd_payment VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            [pid, clean_string(d.get("loan_id")), amount, ts,
+            "INSERT INTO hlx_dev_lnd.lnd_payment VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            [sk, pid, clean_string(d.get("loan_id")), amount, ts,
              normalise_category(d.get("payment_method_type")),
              clean_string(d.get("payment_method_last_four")),
              clean_string(d.get("payment_method_bank")),

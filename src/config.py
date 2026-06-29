@@ -58,6 +58,7 @@ SCHEMA_MART = f"hlx_{ENV}_mart"
 # Raw layer
 TBL_RAW_LOAN     = f"{SCHEMA_RAW}.raw_loan"
 TBL_RAW_PAYMENT  = f"{SCHEMA_RAW}.raw_payment"
+TBL_RAW_AUDIT    = f"{SCHEMA_RAW}.raw_audit"
 
 # Landing layer
 TBL_LND_LOAN     = f"{SCHEMA_LND}.lnd_loan"

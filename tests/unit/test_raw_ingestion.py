@@ -93,6 +93,26 @@ def ingest_raw_loan(conn, source_path: Path, batch_ts: datetime) -> dict:
         )
         rows_inserted = len(good_rows)
 
+    # Write raw_audit summary (mirrors production asset behaviour)
+    dup_stats = conn.execute("""
+        SELECT
+            COUNT(DISTINCT loan_id)                             AS distinct_keys,
+            SUM(CASE WHEN cnt > 1 THEN 1 ELSE 0 END)           AS dup_key_count,
+            SUM(CASE WHEN cnt > 1 THEN cnt - 1 ELSE 0 END)     AS true_dup_count
+        FROM (
+            SELECT loan_id, COUNT(*) AS cnt
+            FROM hlx_dev_raw.raw_loan
+            WHERE _last_updated_ts = ?
+            GROUP BY loan_id
+        )
+    """, [batch_ts]).fetchone()
+    conn.execute(
+        "INSERT INTO hlx_dev_raw.raw_audit VALUES (?,?,?,?,?,?,?,?,?,?)",
+        [batch_ts, source_path.name, "hlx_dev_raw.raw_loan",
+         rows_in, rows_inserted,
+         dup_stats[0], dup_stats[1], dup_stats[2], 0, batch_ts]
+    )
+
     return {"rows_in": rows_in, "rows_inserted": rows_inserted,
             "rows_rejected": rows_rejected}
 
@@ -183,6 +203,14 @@ def conn():
     c = duckdb.connect(":memory:")
     c.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_raw")
     c.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_lnd")
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS hlx_dev_raw.raw_audit (
+            batch_ts TIMESTAMP, source_file VARCHAR, source_table VARCHAR,
+            total_rows_in_file INTEGER, total_rows_inserted INTEGER,
+            distinct_keys INTEGER, duplicate_key_count INTEGER,
+            true_duplicate_count INTEGER, diff_amount_same_id_count INTEGER,
+            _last_updated_ts TIMESTAMP
+        )""")
     yield c
     c.close()
 
@@ -289,6 +317,26 @@ class TestRawLoanIngestion:
         ingest_raw_loan(conn, LOAN_FIXTURE, batch_ts2)
         total = conn.execute("SELECT COUNT(*) FROM hlx_dev_raw.raw_loan").fetchone()[0]
         assert total == 20   # 10 + 10
+
+    def test_raw_audit_written_after_loan_load(self, conn, batch_ts):
+        """raw_audit must have one row per batch after raw_loan ingestion."""
+        ingest_raw_loan(conn, LOAN_FIXTURE, batch_ts)
+        count = conn.execute(
+            "SELECT COUNT(*) FROM hlx_dev_raw.raw_audit WHERE source_table = 'hlx_dev_raw.raw_loan'"
+        ).fetchone()[0]
+        assert count == 1
+
+    def test_raw_audit_duplicate_count_correct(self, conn, batch_ts):
+        """Fixture has L0000001 duplicated — raw_audit must capture it."""
+        ingest_raw_loan(conn, LOAN_FIXTURE, batch_ts)
+        row = conn.execute(
+            """SELECT duplicate_key_count, true_duplicate_count
+               FROM hlx_dev_raw.raw_audit
+               WHERE source_table = 'hlx_dev_raw.raw_loan'"""
+        ).fetchone()
+        assert row is not None
+        assert row[0] >= 1, "duplicate_key_count must be at least 1 (L0000001 is duplicated)"
+        assert row[1] >= 1, "true_duplicate_count must be at least 1"
 
 
 # ---------------------------------------------------------------------------

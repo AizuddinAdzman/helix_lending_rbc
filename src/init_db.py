@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config import (
     ENV, DB_PATH, OUTPUT_DIR,
     SCHEMA_RAW, SCHEMA_LND, SCHEMA_STG, SCHEMA_DIM, SCHEMA_FCT, SCHEMA_MART,
-    TBL_RAW_LOAN, TBL_RAW_PAYMENT,
+    TBL_RAW_LOAN, TBL_RAW_PAYMENT, TBL_RAW_AUDIT,
     TBL_LND_LOAN, TBL_LND_PAYMENT, TBL_LND_ERR_LOAN, TBL_LND_ERR_PAYMENT, TBL_LND_DQ_AUDIT,
     TBL_STG_LOAN_PAYMENT,
     TBL_DIM_CUSTOMER, TBL_DIM_DATE,
@@ -67,6 +67,19 @@ TABLES = [
             _source_file              VARCHAR,
             _last_updated_ts          TIMESTAMP
         )"""),
+    (TBL_RAW_AUDIT, f"""
+        CREATE TABLE IF NOT EXISTS {TBL_RAW_AUDIT} (
+            batch_ts                    TIMESTAMP     NOT NULL,
+            source_file                 VARCHAR       NOT NULL,
+            source_table                VARCHAR       NOT NULL,
+            total_rows_in_file          INTEGER,
+            total_rows_inserted         INTEGER,
+            distinct_keys               INTEGER,
+            duplicate_key_count         INTEGER,
+            true_duplicate_count        INTEGER,
+            diff_amount_same_id_count   INTEGER,
+            _last_updated_ts            TIMESTAMP
+        )"""),
     # ── LANDING ──────────────────────────────────────────────────────────────
     (TBL_LND_LOAN, f"""
         CREATE TABLE IF NOT EXISTS {TBL_LND_LOAN} (
@@ -89,6 +102,7 @@ TABLES = [
         )"""),
     (TBL_LND_PAYMENT, f"""
         CREATE TABLE IF NOT EXISTS {TBL_LND_PAYMENT} (
+            lnd_payment_sk            BIGINT,
             payment_id                VARCHAR       NOT NULL,
             loan_id                   VARCHAR,
             amount                    DECIMAL(18,2),
@@ -229,6 +243,7 @@ TABLES = [
         )"""),
     (TBL_FCT_PAYMENT, f"""
         CREATE TABLE IF NOT EXISTS {TBL_FCT_PAYMENT} (
+            lnd_payment_sk        BIGINT,
             payment_id            VARCHAR,
             loan_id               VARCHAR,
             customer_id           VARCHAR,
