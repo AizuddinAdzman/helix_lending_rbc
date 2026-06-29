@@ -31,9 +31,12 @@ Coverage:
         - Fail: stale data (no recent batch)
 """
 
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 from datetime import datetime, timezone, date, timedelta
+from typing import List
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
@@ -50,14 +53,16 @@ from config import DQ_ACCEPTANCE_THRESHOLD, DQ_MAX_NULL_RATE
 @pytest.fixture
 def conn():
     c = duckdb.connect(":memory:")
+    c.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_lnd")
+    c.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_raw")
     yield c
     c.close()
 
 
-def _setup_lnd_loan(conn, rows: list[dict]):
+def _setup_lnd_loan(conn, rows: List[dict]):
     """Insert rows into a minimal lnd_loan table."""
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS lnd_loan (
+        CREATE TABLE IF NOT EXISTS hlx_dev_lnd.lnd_loan (
             loan_id         VARCHAR,
             customer_id     VARCHAR,
             product_type    VARCHAR,
@@ -72,7 +77,7 @@ def _setup_lnd_loan(conn, rows: list[dict]):
     """)
     for r in rows:
         conn.execute("""
-            INSERT INTO lnd_loan VALUES (?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO hlx_dev_lnd.lnd_loan VALUES (?,?,?,?,?,?,?,?,?,?)
         """, [
             r.get("loan_id"), r.get("customer_id"), r.get("product_type"),
             r.get("principal_amount"), r.get("interest_rate"),
@@ -82,9 +87,9 @@ def _setup_lnd_loan(conn, rows: list[dict]):
         ])
 
 
-def _setup_lnd_payment(conn, rows: list[dict]):
+def _setup_lnd_payment(conn, rows: List[dict]):
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS lnd_payment (
+        CREATE TABLE IF NOT EXISTS hlx_dev_lnd.lnd_payment (
             payment_id      VARCHAR,
             loan_id         VARCHAR,
             amount          DECIMAL(18,2),
@@ -94,7 +99,7 @@ def _setup_lnd_payment(conn, rows: list[dict]):
     """)
     for r in rows:
         conn.execute(
-            "INSERT INTO lnd_payment VALUES (?,?,?,?,?)",
+            "INSERT INTO hlx_dev_lnd.lnd_payment VALUES (?,?,?,?,?)",
             [r.get("payment_id"), r.get("loan_id"), r.get("amount"),
              r.get("ts", datetime.now(timezone.utc)),
              r.get("ts", datetime.now(timezone.utc))]
@@ -104,8 +109,11 @@ def _setup_lnd_payment(conn, rows: list[dict]):
 def _setup_raw_counts(conn, raw_in: int, err_count: int, table: str):
     """Set up raw_ and err_ counts for acceptance rate checks."""
     ts = datetime.now(timezone.utc)
-    raw_table = f"raw_{table}"
-    err_table = f"err_{table}"
+    raw_table = f"hlx_dev_raw.raw_{table}"
+    err_table = f"hlx_dev_lnd.lnd_err_{table}"
+
+    conn.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_raw")
+    conn.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_lnd")
 
     conn.execute(f"""
         CREATE TABLE IF NOT EXISTS {raw_table} (
@@ -199,9 +207,9 @@ class TestVolumeSQL:
         """Verify the SQL-based acceptance rate calculation."""
         _setup_raw_counts(conn, raw_in=100, err_count=2, table="loan")
         rate = conn.execute("""
-            SELECT (COUNT(*) - (SELECT COUNT(*) FROM err_loan)) * 1.0
+            SELECT (COUNT(*) - (SELECT COUNT(*) FROM hlx_dev_lnd.lnd_err_loan)) * 1.0
                    / NULLIF(COUNT(*), 0)
-            FROM raw_loan
+            FROM hlx_dev_raw.raw_loan
         """).fetchone()[0]
         assert abs(rate - 0.98) < 0.001
 
@@ -221,7 +229,7 @@ class TestUniqueness:
         dup_count = conn.execute("""
             SELECT COUNT(*) FROM (
                 SELECT loan_id, COUNT(*) AS cnt
-                FROM lnd_loan WHERE is_current_flag = TRUE
+                FROM hlx_dev_lnd.lnd_loan WHERE is_current_flag = TRUE
                 GROUP BY loan_id HAVING cnt > 1
             )
         """).fetchone()[0]
@@ -236,7 +244,7 @@ class TestUniqueness:
         dup_count = conn.execute("""
             SELECT COUNT(*) FROM (
                 SELECT loan_id, COUNT(*) AS cnt
-                FROM lnd_loan WHERE is_current_flag = TRUE
+                FROM hlx_dev_lnd.lnd_loan WHERE is_current_flag = TRUE
                 GROUP BY loan_id HAVING cnt > 1
             )
         """).fetchone()[0]
@@ -251,7 +259,7 @@ class TestUniqueness:
         dup_count = conn.execute("""
             SELECT COUNT(*) FROM (
                 SELECT loan_id, COUNT(*) AS cnt
-                FROM lnd_loan WHERE is_current_flag = TRUE
+                FROM hlx_dev_lnd.lnd_loan WHERE is_current_flag = TRUE
                 GROUP BY loan_id HAVING cnt > 1
             )
         """).fetchone()[0]
@@ -266,7 +274,7 @@ class TestUniqueness:
         dup_count = conn.execute("""
             SELECT COUNT(*) FROM (
                 SELECT payment_id, COUNT(*) AS cnt
-                FROM lnd_payment
+                FROM hlx_dev_lnd.lnd_payment
                 GROUP BY payment_id HAVING cnt > 1
             )
         """).fetchone()[0]
@@ -281,7 +289,7 @@ class TestUniqueness:
         dup_count = conn.execute("""
             SELECT COUNT(*) FROM (
                 SELECT payment_id, COUNT(*) AS cnt
-                FROM lnd_payment
+                FROM hlx_dev_lnd.lnd_payment
                 GROUP BY payment_id HAVING cnt > 1
             )
         """).fetchone()[0]
@@ -301,7 +309,7 @@ class TestCompleteness:
              "origination_date": date(2023, 1, 1), "is_current_flag": True},
         ])
         null_count = conn.execute(
-            "SELECT COUNT(*) FROM lnd_loan WHERE loan_id IS NULL"
+            "SELECT COUNT(*) FROM hlx_dev_lnd.lnd_loan WHERE loan_id IS NULL"
         ).fetchone()[0]
         null_rate = null_count / 1
         assert null_rate <= DQ_MAX_NULL_RATE
@@ -311,10 +319,10 @@ class TestCompleteness:
         rows = [{"loan_id": f"L00{i}", "is_current_flag": True} for i in range(5)]
         _setup_lnd_loan(conn, rows)
         total = conn.execute(
-            "SELECT COUNT(*) FROM lnd_loan WHERE is_current_flag = TRUE"
+            "SELECT COUNT(*) FROM hlx_dev_lnd.lnd_loan WHERE is_current_flag = TRUE"
         ).fetchone()[0]
         null_count = conn.execute(
-            "SELECT COUNT(*) FROM lnd_loan WHERE loan_id IS NULL AND is_current_flag = TRUE"
+            "SELECT COUNT(*) FROM hlx_dev_lnd.lnd_loan WHERE loan_id IS NULL AND is_current_flag = TRUE"
         ).fetchone()[0]
         null_rate = null_count / total
         assert null_rate <= DQ_MAX_NULL_RATE
@@ -329,10 +337,10 @@ class TestCompleteness:
         )
         _setup_lnd_loan(conn, rows)
         total = conn.execute(
-            "SELECT COUNT(*) FROM lnd_loan WHERE is_current_flag = TRUE"
+            "SELECT COUNT(*) FROM hlx_dev_lnd.lnd_loan WHERE is_current_flag = TRUE"
         ).fetchone()[0]
         null_count = conn.execute(
-            "SELECT COUNT(*) FROM lnd_loan WHERE status IS NULL AND is_current_flag = TRUE"
+            "SELECT COUNT(*) FROM hlx_dev_lnd.lnd_loan WHERE status IS NULL AND is_current_flag = TRUE"
         ).fetchone()[0]
         null_rate = null_count / total
         assert null_rate > DQ_MAX_NULL_RATE
@@ -347,10 +355,10 @@ class TestCompleteness:
         )
         _setup_lnd_loan(conn, rows)
         total = conn.execute(
-            "SELECT COUNT(*) FROM lnd_loan WHERE is_current_flag = TRUE"
+            "SELECT COUNT(*) FROM hlx_dev_lnd.lnd_loan WHERE is_current_flag = TRUE"
         ).fetchone()[0]
         null_count = conn.execute(
-            "SELECT COUNT(*) FROM lnd_loan WHERE status IS NULL AND is_current_flag = TRUE"
+            "SELECT COUNT(*) FROM hlx_dev_lnd.lnd_loan WHERE status IS NULL AND is_current_flag = TRUE"
         ).fetchone()[0]
         null_rate = null_count / total
         assert null_rate <= DQ_MAX_NULL_RATE
@@ -374,10 +382,10 @@ class TestReferentialIntegrity:
     def test_all_loan_ids_exist_passes(self, conn):
         self._setup_both(conn, ["L001", "L002"], ["L001", "L001", "L002"])
         orphans = conn.execute("""
-            SELECT COUNT(*) FROM lnd_payment p
+            SELECT COUNT(*) FROM hlx_dev_lnd.lnd_payment p
             WHERE p.loan_id IS NOT NULL
               AND NOT EXISTS (
-                  SELECT 1 FROM lnd_loan l WHERE l.loan_id = p.loan_id
+                  SELECT 1 FROM hlx_dev_lnd.lnd_loan l WHERE l.loan_id = p.loan_id
               )
         """).fetchone()[0]
         assert orphans == 0
@@ -385,10 +393,10 @@ class TestReferentialIntegrity:
     def test_orphan_loan_id_detected(self, conn):
         self._setup_both(conn, ["L001"], ["L001", "L9999"])  # L9999 is orphan
         orphans = conn.execute("""
-            SELECT COUNT(*) FROM lnd_payment p
+            SELECT COUNT(*) FROM hlx_dev_lnd.lnd_payment p
             WHERE p.loan_id IS NOT NULL
               AND NOT EXISTS (
-                  SELECT 1 FROM lnd_loan l WHERE l.loan_id = p.loan_id
+                  SELECT 1 FROM hlx_dev_lnd.lnd_loan l WHERE l.loan_id = p.loan_id
               )
         """).fetchone()[0]
         assert orphans == 1
@@ -401,10 +409,10 @@ class TestReferentialIntegrity:
             {"payment_id": "P002", "loan_id": "L001", "amount": 200},
         ])
         orphans = conn.execute("""
-            SELECT COUNT(*) FROM lnd_payment p
+            SELECT COUNT(*) FROM hlx_dev_lnd.lnd_payment p
             WHERE p.loan_id IS NOT NULL
               AND NOT EXISTS (
-                  SELECT 1 FROM lnd_loan l WHERE l.loan_id = p.loan_id
+                  SELECT 1 FROM hlx_dev_lnd.lnd_loan l WHERE l.loan_id = p.loan_id
               )
         """).fetchone()[0]
         assert orphans == 0
@@ -416,10 +424,10 @@ class TestReferentialIntegrity:
             ["L001", "L9998", "L9999"],  # 2 orphans
         )
         orphans = conn.execute("""
-            SELECT COUNT(*) FROM lnd_payment p
+            SELECT COUNT(*) FROM hlx_dev_lnd.lnd_payment p
             WHERE p.loan_id IS NOT NULL
               AND NOT EXISTS (
-                  SELECT 1 FROM lnd_loan l WHERE l.loan_id = p.loan_id
+                  SELECT 1 FROM hlx_dev_lnd.lnd_loan l WHERE l.loan_id = p.loan_id
               )
         """).fetchone()[0]
         assert orphans == 2
@@ -438,7 +446,7 @@ class TestFreshness:
             {"loan_id": "L001", "is_current_flag": True, "ts": now}
         ])
         latest = conn.execute(
-            "SELECT MAX(_last_updated_ts) FROM lnd_loan"
+            "SELECT MAX(_last_updated_ts) FROM hlx_dev_lnd.lnd_loan"
         ).fetchone()[0]
         # Should be within last 24 hours
         age_hours = (now - latest.replace(tzinfo=timezone.utc)).total_seconds() / 3600
@@ -451,7 +459,7 @@ class TestFreshness:
             {"loan_id": "L001", "is_current_flag": True, "ts": stale_ts}
         ])
         latest = conn.execute(
-            "SELECT MAX(_last_updated_ts) FROM lnd_loan"
+            "SELECT MAX(_last_updated_ts) FROM hlx_dev_lnd.lnd_loan"
         ).fetchone()[0]
         now = datetime.now(timezone.utc)
         age_hours = (now - latest.replace(tzinfo=timezone.utc)).total_seconds() / 3600
@@ -459,12 +467,12 @@ class TestFreshness:
 
     def test_empty_table_has_no_freshness(self, conn):
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS lnd_loan (
+            CREATE TABLE IF NOT EXISTS hlx_dev_lnd.lnd_loan (
                 loan_id VARCHAR, _last_updated_ts TIMESTAMP,
                 is_current_flag BOOLEAN
             )
         """)
         latest = conn.execute(
-            "SELECT MAX(_last_updated_ts) FROM lnd_loan"
+            "SELECT MAX(_last_updated_ts) FROM hlx_dev_lnd.lnd_loan"
         ).fetchone()[0]
         assert latest is None

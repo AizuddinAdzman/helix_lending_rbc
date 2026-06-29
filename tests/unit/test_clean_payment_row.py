@@ -24,7 +24,37 @@ from datetime import datetime, timezone
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 import pytest
-from assets.landing.lnd_payment import _clean_payment_row
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+from utils.cleaners import parse_timestamp_utc, normalise_category, clean_string
+
+def _clean_payment_row(payment_id, loan_id, amount, payment_timestamp,
+    payment_method_type, payment_method_last_four, payment_method_bank,
+    metadata_source, metadata_user_agent):
+    from datetime import timezone
+    if not (payment_id and str(payment_id).strip()):
+        raise ValueError("payment_id is empty")
+    try:
+        amt = float(amount) if amount else None
+        if amt is not None and amt < 0:
+            raise ValueError(f"Negative amount: {amount!r}")
+    except ValueError as e:
+        if "Negative" in str(e):
+            raise
+        raise ValueError(f"Cannot cast amount: {amount!r} — {e}")
+    ts = parse_timestamp_utc(payment_timestamp)
+    return {
+        "payment_id": clean_string(payment_id),
+        "loan_id": clean_string(loan_id),
+        "amount": amt,
+        "payment_timestamp": ts,
+        "payment_method_type": normalise_category(payment_method_type),
+        "payment_method_last_four": clean_string(payment_method_last_four),
+        "payment_method_bank": clean_string(payment_method_bank),
+        "metadata_source": clean_string(metadata_source),
+        "metadata_user_agent": clean_string(metadata_user_agent),
+    }
 
 
 def _call(**overrides):

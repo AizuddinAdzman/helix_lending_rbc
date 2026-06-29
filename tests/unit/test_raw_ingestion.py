@@ -44,7 +44,7 @@ PAYMENT_FIXTURE = FIXTURE_DIR / "payment_fixture.jsonl"
 def ingest_raw_loan(conn, source_path: Path, batch_ts: datetime) -> dict:
     """Replicate raw_loan.py ingestion logic against an in-memory DuckDB."""
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS raw_loan (
+        CREATE TABLE IF NOT EXISTS hlx_dev_raw.raw_loan (
             loan_id VARCHAR, customer_id VARCHAR, product_type VARCHAR,
             principal_amount VARCHAR, interest_rate VARCHAR, term_months VARCHAR,
             origination_date VARCHAR, origination_channel VARCHAR,
@@ -53,7 +53,7 @@ def ingest_raw_loan(conn, source_path: Path, batch_ts: datetime) -> dict:
         )
     """)
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS err_loan (
+        CREATE TABLE IF NOT EXISTS hlx_dev_lnd.lnd_err_loan (
             loan_id VARCHAR, customer_id VARCHAR, product_type VARCHAR,
             principal_amount VARCHAR, interest_rate VARCHAR, term_months VARCHAR,
             origination_date VARCHAR, origination_channel VARCHAR,
@@ -88,7 +88,7 @@ def ingest_raw_loan(conn, source_path: Path, batch_ts: datetime) -> dict:
 
     if good_rows:
         conn.executemany(
-            "INSERT INTO raw_loan VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO hlx_dev_raw.raw_loan VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             good_rows,
         )
         rows_inserted = len(good_rows)
@@ -100,7 +100,7 @@ def ingest_raw_loan(conn, source_path: Path, batch_ts: datetime) -> dict:
 def ingest_raw_payment(conn, source_path: Path, batch_ts: datetime) -> dict:
     """Replicate raw_payment.py ingestion logic against an in-memory DuckDB."""
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS raw_payment (
+        CREATE TABLE IF NOT EXISTS hlx_dev_raw.raw_payment (
             payment_id VARCHAR, loan_id VARCHAR, amount VARCHAR,
             payment_timestamp VARCHAR, payment_method_type VARCHAR,
             payment_method_last_four VARCHAR, payment_method_bank VARCHAR,
@@ -109,7 +109,7 @@ def ingest_raw_payment(conn, source_path: Path, batch_ts: datetime) -> dict:
         )
     """)
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS err_payment (
+        CREATE TABLE IF NOT EXISTS hlx_dev_lnd.lnd_err_payment (
             payment_id VARCHAR, loan_id VARCHAR, amount VARCHAR,
             payment_timestamp VARCHAR, payment_method_type VARCHAR,
             payment_method_last_four VARCHAR, payment_method_bank VARCHAR,
@@ -158,14 +158,14 @@ def ingest_raw_payment(conn, source_path: Path, batch_ts: datetime) -> dict:
 
     if good_rows:
         conn.executemany(
-            "INSERT INTO raw_payment VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO hlx_dev_raw.raw_payment VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             good_rows,
         )
         rows_inserted = len(good_rows)
 
     if bad_rows:
         conn.executemany(
-            "INSERT INTO err_payment VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO hlx_dev_lnd.lnd_err_payment VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             bad_rows,
         )
 
@@ -181,6 +181,8 @@ def ingest_raw_payment(conn, source_path: Path, batch_ts: datetime) -> dict:
 def conn():
     """Fresh in-memory DuckDB per test."""
     c = duckdb.connect(":memory:")
+    c.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_raw")
+    c.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_lnd")
     yield c
     c.close()
 
@@ -199,7 +201,7 @@ class TestRawLoanIngestion:
     def test_all_rows_inserted_including_dirty(self, conn, batch_ts):
         """Raw layer inserts everything — no validation, no rejection."""
         result = ingest_raw_loan(conn, LOAN_FIXTURE, batch_ts)
-        total = conn.execute("SELECT COUNT(*) FROM raw_loan").fetchone()[0]
+        total = conn.execute("SELECT COUNT(*) FROM hlx_dev_raw.raw_loan").fetchone()[0]
         assert total == 10        # all 10 rows including duplicate + bad amount
 
     def test_rows_in_matches_csv_line_count(self, conn, batch_ts):
@@ -215,7 +217,7 @@ class TestRawLoanIngestion:
         """Duplicate loan_id L0000001 appears twice in raw — both kept."""
         ingest_raw_loan(conn, LOAN_FIXTURE, batch_ts)
         count = conn.execute(
-            "SELECT COUNT(*) FROM raw_loan WHERE loan_id = 'L0000001'"
+            "SELECT COUNT(*) FROM hlx_dev_raw.raw_loan WHERE loan_id = 'L0000001'"
         ).fetchone()[0]
         assert count == 2
 
@@ -223,7 +225,7 @@ class TestRawLoanIngestion:
         """not_a_number is stored as-is — raw never casts."""
         ingest_raw_loan(conn, LOAN_FIXTURE, batch_ts)
         row = conn.execute(
-            "SELECT principal_amount FROM raw_loan WHERE loan_id = 'L0000006'"
+            "SELECT principal_amount FROM hlx_dev_raw.raw_loan WHERE loan_id = 'L0000006'"
         ).fetchone()
         assert row is not None
         assert row[0] == "not_a_number"
@@ -232,7 +234,7 @@ class TestRawLoanIngestion:
         """Row with empty loan_id is stored with NULL loan_id in raw."""
         ingest_raw_loan(conn, LOAN_FIXTURE, batch_ts)
         count = conn.execute(
-            "SELECT COUNT(*) FROM raw_loan WHERE loan_id IS NULL"
+            "SELECT COUNT(*) FROM hlx_dev_raw.raw_loan WHERE loan_id IS NULL"
         ).fetchone()[0]
         assert count == 1
 
@@ -240,7 +242,7 @@ class TestRawLoanIngestion:
         """$8,500.00 stays as string at raw layer."""
         ingest_raw_loan(conn, LOAN_FIXTURE, batch_ts)
         row = conn.execute(
-            "SELECT principal_amount FROM raw_loan WHERE loan_id = 'L0000004'"
+            "SELECT principal_amount FROM hlx_dev_raw.raw_loan WHERE loan_id = 'L0000004'"
         ).fetchone()
         assert row[0] == "$8,500.00"
 
@@ -248,7 +250,7 @@ class TestRawLoanIngestion:
         """MORTGAGE, Student, AUTO all stored as-is at raw layer."""
         ingest_raw_loan(conn, LOAN_FIXTURE, batch_ts)
         types = set(r[0] for r in conn.execute(
-            "SELECT DISTINCT product_type FROM raw_loan"
+            "SELECT DISTINCT product_type FROM hlx_dev_raw.raw_loan"
         ).fetchall())
         assert "MORTGAGE" in types
         assert "Student" in types
@@ -258,7 +260,7 @@ class TestRawLoanIngestion:
         """Every row has _source_file and _last_updated_ts."""
         ingest_raw_loan(conn, LOAN_FIXTURE, batch_ts)
         nulls = conn.execute(
-            """SELECT COUNT(*) FROM raw_loan
+            """SELECT COUNT(*) FROM hlx_dev_raw.raw_loan
                WHERE _source_file IS NULL OR _last_updated_ts IS NULL"""
         ).fetchone()[0]
         assert nulls == 0
@@ -266,14 +268,14 @@ class TestRawLoanIngestion:
     def test_source_file_is_filename_with_extension(self, conn, batch_ts):
         ingest_raw_loan(conn, LOAN_FIXTURE, batch_ts)
         fname = conn.execute(
-            "SELECT DISTINCT _source_file FROM raw_loan"
+            "SELECT DISTINCT _source_file FROM hlx_dev_raw.raw_loan"
         ).fetchone()[0]
         assert fname == "loan_fixture.csv"
 
     def test_batch_ts_stored_correctly(self, conn, batch_ts):
         ingest_raw_loan(conn, LOAN_FIXTURE, batch_ts)
         stored = conn.execute(
-            "SELECT DISTINCT _last_updated_ts FROM raw_loan"
+            "SELECT DISTINCT _last_updated_ts FROM hlx_dev_raw.raw_loan"
         ).fetchone()[0]
         # DuckDB returns datetime — compare date portion
         assert stored.year == 2024
@@ -285,7 +287,7 @@ class TestRawLoanIngestion:
         ingest_raw_loan(conn, LOAN_FIXTURE, batch_ts)
         batch_ts2 = datetime(2024, 1, 16, 0, 0, 0, tzinfo=timezone.utc)
         ingest_raw_loan(conn, LOAN_FIXTURE, batch_ts2)
-        total = conn.execute("SELECT COUNT(*) FROM raw_loan").fetchone()[0]
+        total = conn.execute("SELECT COUNT(*) FROM hlx_dev_raw.raw_loan").fetchone()[0]
         assert total == 20   # 10 + 10
 
 
@@ -298,21 +300,21 @@ class TestRawPaymentIngestion:
     def test_good_rows_inserted(self, conn, batch_ts):
         """9 parseable lines inserted, 1 bad JSON line rejected."""
         result = ingest_raw_payment(conn, PAYMENT_FIXTURE, batch_ts)
-        total = conn.execute("SELECT COUNT(*) FROM raw_payment").fetchone()[0]
+        total = conn.execute("SELECT COUNT(*) FROM hlx_dev_raw.raw_payment").fetchone()[0]
         assert total == 9
 
     def test_bad_json_goes_to_err_payment(self, conn, batch_ts):
         """Unparseable JSON line → err_payment."""
         ingest_raw_payment(conn, PAYMENT_FIXTURE, batch_ts)
         err_count = conn.execute(
-            "SELECT COUNT(*) FROM err_payment"
+            "SELECT COUNT(*) FROM hlx_dev_lnd.lnd_err_payment"
         ).fetchone()[0]
         assert err_count == 1
 
     def test_bad_json_rejection_reason_populated(self, conn, batch_ts):
         ingest_raw_payment(conn, PAYMENT_FIXTURE, batch_ts)
         reason = conn.execute(
-            "SELECT _rejection_reason FROM err_payment LIMIT 1"
+            "SELECT _rejection_reason FROM hlx_dev_lnd.lnd_err_payment LIMIT 1"
         ).fetchone()[0]
         assert reason is not None
         assert len(reason) > 0
@@ -321,7 +323,7 @@ class TestRawPaymentIngestion:
         """P000000001 appears twice in fixture — both kept at raw layer."""
         ingest_raw_payment(conn, PAYMENT_FIXTURE, batch_ts)
         count = conn.execute(
-            "SELECT COUNT(*) FROM raw_payment WHERE payment_id = 'P000000001'"
+            "SELECT COUNT(*) FROM hlx_dev_raw.raw_payment WHERE payment_id = 'P000000001'"
         ).fetchone()[0]
         assert count == 2
 
@@ -329,7 +331,7 @@ class TestRawPaymentIngestion:
         """P000000006 references L9999999 which doesn't exist — raw keeps it."""
         ingest_raw_payment(conn, PAYMENT_FIXTURE, batch_ts)
         row = conn.execute(
-            "SELECT loan_id FROM raw_payment WHERE payment_id = 'P000000006'"
+            "SELECT loan_id FROM hlx_dev_raw.raw_payment WHERE payment_id = 'P000000006'"
         ).fetchone()
         assert row is not None
         assert row[0] == "L9999999"
@@ -339,7 +341,7 @@ class TestRawPaymentIngestion:
         ingest_raw_payment(conn, PAYMENT_FIXTURE, batch_ts)
         row = conn.execute(
             """SELECT metadata_source, metadata_user_agent
-               FROM raw_payment WHERE payment_id = 'P000000004'"""
+               FROM hlx_dev_raw.raw_payment WHERE payment_id = 'P000000004'"""
         ).fetchone()
         assert row is not None
         assert row[0] is None
@@ -349,7 +351,7 @@ class TestRawPaymentIngestion:
         """Amount is stored as string at raw layer — no casting."""
         ingest_raw_payment(conn, PAYMENT_FIXTURE, batch_ts)
         row = conn.execute(
-            "SELECT amount FROM raw_payment WHERE payment_id = 'P000000001'"
+            "SELECT amount FROM hlx_dev_raw.raw_payment WHERE payment_id = 'P000000001'"
             " LIMIT 1"
         ).fetchone()
         assert isinstance(row[0], str)
@@ -359,7 +361,7 @@ class TestRawPaymentIngestion:
         """Timestamps kept as original strings — no UTC conversion at raw."""
         ingest_raw_payment(conn, PAYMENT_FIXTURE, batch_ts)
         row = conn.execute(
-            """SELECT payment_timestamp FROM raw_payment
+            """SELECT payment_timestamp FROM hlx_dev_raw.raw_payment
                WHERE payment_id = 'P000000001' LIMIT 1"""
         ).fetchone()
         assert "Z" in row[0] or "+" in row[0] or "-" in row[0]
@@ -367,7 +369,7 @@ class TestRawPaymentIngestion:
     def test_audit_columns_populated(self, conn, batch_ts):
         ingest_raw_payment(conn, PAYMENT_FIXTURE, batch_ts)
         nulls = conn.execute(
-            """SELECT COUNT(*) FROM raw_payment
+            """SELECT COUNT(*) FROM hlx_dev_raw.raw_payment
                WHERE _source_file IS NULL OR _last_updated_ts IS NULL"""
         ).fetchone()[0]
         assert nulls == 0
@@ -375,6 +377,6 @@ class TestRawPaymentIngestion:
     def test_source_file_is_filename_with_extension(self, conn, batch_ts):
         ingest_raw_payment(conn, PAYMENT_FIXTURE, batch_ts)
         fname = conn.execute(
-            "SELECT DISTINCT _source_file FROM raw_payment"
+            "SELECT DISTINCT _source_file FROM hlx_dev_raw.raw_payment"
         ).fetchone()[0]
         assert fname == "payment_fixture.jsonl"

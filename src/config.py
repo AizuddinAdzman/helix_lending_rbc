@@ -2,94 +2,127 @@
 config.py
 ---------
 Central configuration for the Helix Lending pipeline.
-All paths, constants, thresholds, and tuneable parameters live here.
-Nothing is hardcoded in individual asset files.
-"""
 
-from __future__ import annotations
+Environment is driven by HELIX_ENV environment variable (default: dev).
+All schema names, DB path, and table references are derived from ENV —
+nothing is hardcoded.
+
+Usage:
+    HELIX_ENV=dev  dagster dev -f definitions.py   # default
+    HELIX_ENV=prd  dagster dev -f definitions.py   # production
+"""
 
 import os
 from pathlib import Path
-from datetime import date, timezone
-from dateutil.relativedelta import relativedelta
+from datetime import date
 from typing import Tuple
+from dateutil.relativedelta import relativedelta
 
 # ---------------------------------------------------------------------------
-# Project root — resolved relative to this file so the project is portable
+# Environment
+# ---------------------------------------------------------------------------
+ENV = os.getenv("HELIX_ENV", "dev")
+
+# ---------------------------------------------------------------------------
+# Project root
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # ---------------------------------------------------------------------------
 # Source data paths
 # ---------------------------------------------------------------------------
-DATA_DIR        = PROJECT_ROOT / "data"
-LOAN_FILE       = DATA_DIR / "loans.csv"
-PAYMENT_FILE    = DATA_DIR / "payments.jsonl"
+DATA_DIR     = PROJECT_ROOT / "data"
+LOAN_FILE    = DATA_DIR / "loans.csv"
+PAYMENT_FILE = DATA_DIR / "payments.jsonl"
 
 # ---------------------------------------------------------------------------
-# Database
+# Database — ENV-driven filename
 # ---------------------------------------------------------------------------
-OUTPUT_DIR      = PROJECT_ROOT / "output"
-DB_PATH         = OUTPUT_DIR / "helix_fund.db"
+OUTPUT_DIR = PROJECT_ROOT / "output"
+DB_PATH    = OUTPUT_DIR / f"helix_{ENV}.db"
+
+# ---------------------------------------------------------------------------
+# Schema names — derived from ENV, never hardcoded
+# ---------------------------------------------------------------------------
+SCHEMA_RAW  = f"hlx_{ENV}_raw"
+SCHEMA_LND  = f"hlx_{ENV}_lnd"
+SCHEMA_STG  = f"hlx_{ENV}_stg"
+SCHEMA_DIM  = f"hlx_{ENV}_dim"
+SCHEMA_FCT  = f"hlx_{ENV}_fct"
+SCHEMA_MART = f"hlx_{ENV}_mart"
+
+# ---------------------------------------------------------------------------
+# Fully qualified table names
+# ---------------------------------------------------------------------------
+
+# Raw layer
+TBL_RAW_LOAN     = f"{SCHEMA_RAW}.raw_loan"
+TBL_RAW_PAYMENT  = f"{SCHEMA_RAW}.raw_payment"
+
+# Landing layer
+TBL_LND_LOAN     = f"{SCHEMA_LND}.lnd_loan"
+TBL_LND_PAYMENT  = f"{SCHEMA_LND}.lnd_payment"
+TBL_LND_ERR_LOAN    = f"{SCHEMA_LND}.lnd_err_loan"
+TBL_LND_ERR_PAYMENT = f"{SCHEMA_LND}.lnd_err_payment"
+TBL_LND_DQ_AUDIT    = f"{SCHEMA_LND}.lnd_dq_audit"
+
+# Staging layer
+TBL_STG_LOAN_PAYMENT = f"{SCHEMA_STG}.stg_loan_payment"
+
+# Dimension layer
+TBL_DIM_CUSTOMER = f"{SCHEMA_DIM}.dim_customer"
+TBL_DIM_DATE     = f"{SCHEMA_DIM}.dim_date"
+
+# Fact layer
+TBL_FCT_LOAN    = f"{SCHEMA_FCT}.fct_loan"
+TBL_FCT_PAYMENT = f"{SCHEMA_FCT}.fct_payment"
+
+# Mart layer
+TBL_MART_DELINQUENCY   = f"{SCHEMA_MART}.mart_delinquency"
+TBL_MART_ANOMALY       = f"{SCHEMA_MART}.mart_payment_anomaly"
+TBL_MART_OBSERVABILITY = f"{SCHEMA_MART}.mart_data_observability"
 
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
-LOG_DIR         = PROJECT_ROOT / "output" / "logs"
-LOG_FILE        = LOG_DIR / "pipeline.log"
+LOG_DIR  = OUTPUT_DIR / "logs"
+LOG_FILE = LOG_DIR / f"pipeline_{ENV}.log"
 
 # ---------------------------------------------------------------------------
 # DQ thresholds
 # ---------------------------------------------------------------------------
-DQ_ACCEPTANCE_THRESHOLD = 0.99          # fail if < 99% rows accepted
-DQ_MAX_NULL_RATE        = 0.10          # warn if any column null rate > 10%
+DQ_ACCEPTANCE_THRESHOLD = 0.99
+DQ_MAX_NULL_RATE        = 0.10
 
 # ---------------------------------------------------------------------------
 # dim_date spine — 80 years centred on today()
-# Recomputed at runtime so the spine is always current.
 # ---------------------------------------------------------------------------
 def get_dim_date_bounds() -> Tuple[date, date]:
     """Return (lower, upper) bounds for the dim_date spine."""
     today = date.today()
-    lower = today - relativedelta(years=40)
-    upper = today + relativedelta(years=40)
-    return lower, upper
+    return today - relativedelta(years=40), today + relativedelta(years=40)
 
 # ---------------------------------------------------------------------------
-# Delinquency definition
-# A loan is considered delinquent if no payment has been recorded
-# within 30 days past the expected due date.
+# Business rules
 # ---------------------------------------------------------------------------
-DELINQUENCY_DAYS = 30
+DELINQUENCY_DAYS  = 30
+EMI_TOLERANCE_PCT = 0.10
+SCD2_OPEN_DATE    = "9999-12-31"
 
 # ---------------------------------------------------------------------------
-# EMI tolerance — flag a payment as anomalous if it deviates from
-# the expected EMI by more than this percentage.
+# Categorical valid values
 # ---------------------------------------------------------------------------
-EMI_TOLERANCE_PCT = 0.10                # 10% tolerance band
+VALID_PRODUCT_TYPES = {"personal", "auto", "mortgage", "student"}
+VALID_LOAN_STATUSES = {"active", "closed", "default"}
+VALID_LOAN_CHANNELS = {"branch", "online", "partner", "mobile"}
 
 # ---------------------------------------------------------------------------
-# SCD2 sentinel — open-ended row indicator in lnd_loan
+# Audit column names
 # ---------------------------------------------------------------------------
-SCD2_OPEN_DATE = "9999-12-31"
-
-# ---------------------------------------------------------------------------
-# Categorical canonical values
-# All product_type, status, origination_channel values are lowercased
-# at the landing layer. These sets define the known valid values.
-# Unknown values are passed through but flagged in DQ.
-# ---------------------------------------------------------------------------
-VALID_PRODUCT_TYPES     = {"personal", "auto", "mortgage", "student"}
-VALID_LOAN_STATUSES     = {"active", "closed", "default"}
-VALID_LOAN_CHANNELS     = {"branch", "online", "partner", "mobile"}
-
-# ---------------------------------------------------------------------------
-# Audit column names — defined once, used everywhere
-# ---------------------------------------------------------------------------
-COL_SOURCE_FILE         = "_source_file"
-COL_LAST_UPDATED_TS     = "_last_updated_ts"
-COL_REJECTION_REASON    = "_rejection_reason"
-COL_REJECTED_AT         = "_rejected_at"
+COL_SOURCE_FILE      = "_source_file"
+COL_LAST_UPDATED_TS  = "_last_updated_ts"
+COL_REJECTION_REASON = "_rejection_reason"
+COL_REJECTED_AT      = "_rejected_at"
 
 # ---------------------------------------------------------------------------
 # Ensure output directories exist at import time

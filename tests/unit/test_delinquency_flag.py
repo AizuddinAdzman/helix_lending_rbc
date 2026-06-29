@@ -18,9 +18,12 @@ Business rule:
 We test the pure helper function extracted here for unit testability.
 """
 
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 from datetime import date, timedelta
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
@@ -34,7 +37,7 @@ from config import DELINQUENCY_DAYS
 # ---------------------------------------------------------------------------
 
 def is_delinquent(
-    last_payment_date: date | None,
+    last_payment_date: Optional[date],
     expected_due_date: date,
     as_of_date: date = None,
     delinquency_days: int = DELINQUENCY_DAYS,

@@ -10,8 +10,8 @@ What this tests:
     Asserts:
         1. raw_loan    — all rows ingested including dirty
         2. raw_payment — good rows inserted, bad JSON → err_payment
-        3. lnd_loan    — typed, cleaned, SCD2 applied, rejects bad rows
-        4. lnd_payment — typed, deduped on payment_id
+        3. hlx_dev_lnd.lnd_loan    — typed, cleaned, SCD2 applied, rejects bad rows
+        4. hlx_dev_lnd.lnd_payment — typed, deduped on payment_id
         5. dq_lnd_loan — DQ checks recorded in dq_results
         6. dq_lnd_payment — RI orphan detected (L9999999)
         7. stg_loan_payment — EMI derived, delinquency flagged
@@ -26,7 +26,7 @@ What this tests:
 Fixture known outcomes:
     Loan fixture:
         10 raw rows total (including 1 duplicate, 1 bad amount, 1 empty id)
-        7 clean rows → lnd_loan (8 unique loans minus bad rows)
+        7 clean rows → hlx_dev_lnd.lnd_loan (8 unique loans minus bad rows)
         2 rejected → err_loan (bad amount L0000006, empty id)
 
     Payment fixture:
@@ -100,21 +100,21 @@ def run_full_pipeline(conn: duckdb.DuckDBPyConnection) -> dict:
     _build_mart_observability(conn, batch_ts, batch_date_str)
 
     return {
-        "raw_loan":               conn.execute("SELECT COUNT(*) FROM raw_loan").fetchone()[0],
-        "raw_payment":            conn.execute("SELECT COUNT(*) FROM raw_payment").fetchone()[0],
-        "err_loan":               conn.execute("SELECT COUNT(*) FROM err_loan").fetchone()[0],
-        "err_payment":            conn.execute("SELECT COUNT(*) FROM err_payment").fetchone()[0],
-        "lnd_loan_current":       conn.execute("SELECT COUNT(*) FROM lnd_loan WHERE is_current_flag=TRUE").fetchone()[0],
-        "lnd_payment":            conn.execute("SELECT COUNT(*) FROM lnd_payment").fetchone()[0],
-        "dq_results":             conn.execute("SELECT COUNT(*) FROM dq_results").fetchone()[0],
-        "stg_loan_payment":       conn.execute("SELECT COUNT(*) FROM stg_loan_payment").fetchone()[0],
-        "dim_customer":           conn.execute("SELECT COUNT(*) FROM dim_customer").fetchone()[0],
-        "dim_date":               conn.execute("SELECT COUNT(*) FROM dim_date").fetchone()[0],
-        "fct_loan":               conn.execute("SELECT COUNT(*) FROM fct_loan").fetchone()[0],
-        "fct_payment":            conn.execute("SELECT COUNT(*) FROM fct_payment").fetchone()[0],
-        "mart_delinquency":       conn.execute("SELECT COUNT(*) FROM mart_delinquency").fetchone()[0],
-        "mart_payment_anomaly":   conn.execute("SELECT COUNT(*) FROM mart_payment_anomaly").fetchone()[0],
-        "mart_data_observability":conn.execute("SELECT COUNT(*) FROM mart_data_observability").fetchone()[0],
+        "raw_loan":               conn.execute("SELECT COUNT(*) FROM hlx_dev_raw.raw_loan").fetchone()[0],
+        "raw_payment":            conn.execute("SELECT COUNT(*) FROM hlx_dev_raw.raw_payment").fetchone()[0],
+        "err_loan":               conn.execute("SELECT COUNT(*) FROM hlx_dev_lnd.lnd_err_loan").fetchone()[0],
+        "err_payment":            conn.execute("SELECT COUNT(*) FROM hlx_dev_lnd.lnd_err_payment").fetchone()[0],
+        "lnd_loan_current":       conn.execute("SELECT COUNT(*) FROM hlx_dev_lnd.lnd_loan WHERE is_current_flag=TRUE").fetchone()[0],
+        "hlx_dev_lnd.lnd_payment":            conn.execute("SELECT COUNT(*) FROM hlx_dev_lnd.lnd_payment").fetchone()[0],
+        "hlx_dev_lnd.lnd_dq_audit":             conn.execute("SELECT COUNT(*) FROM hlx_dev_lnd.lnd_dq_audit").fetchone()[0],
+        "stg_loan_payment":       conn.execute("SELECT COUNT(*) FROM hlx_dev_stg.stg_loan_payment").fetchone()[0],
+        "dim_customer":           conn.execute("SELECT COUNT(*) FROM hlx_dev_dim.dim_customer").fetchone()[0],
+        "dim_date":               conn.execute("SELECT COUNT(*) FROM hlx_dev_dim.dim_date").fetchone()[0],
+        "fct_loan":               conn.execute("SELECT COUNT(*) FROM hlx_dev_fct.fct_loan").fetchone()[0],
+        "fct_payment":            conn.execute("SELECT COUNT(*) FROM hlx_dev_fct.fct_payment").fetchone()[0],
+        "mart_delinquency":       conn.execute("SELECT COUNT(*) FROM hlx_dev_mart.mart_delinquency").fetchone()[0],
+        "mart_payment_anomaly":   conn.execute("SELECT COUNT(*) FROM hlx_dev_mart.mart_payment_anomaly").fetchone()[0],
+        "mart_data_observability":conn.execute("SELECT COUNT(*) FROM hlx_dev_mart.mart_data_observability").fetchone()[0],
         "dq_loan":   dq_loan_results,
         "dq_payment":dq_payment_results,
     }
@@ -155,7 +155,7 @@ class TestRawLayer:
         Raw layer itself never rejects rows — bad rows still get inserted as VARCHAR.
         err_loan IS populated but only by the lnd_ transform layer (bad_amount, empty_id).
         This test confirms raw ingestion itself produces no errors.
-        The 2 rows in err_loan come from lnd_loan transform, not raw ingestion.
+        The 2 rows in err_loan come from hlx_dev_lnd.lnd_loan transform, not raw ingestion.
         """
         # Raw layer inserts everything — verify all 10 rows are in raw_loan
         conn, r = pipeline_results
@@ -170,27 +170,27 @@ class TestLandingLayer:
 
     def test_lnd_loan_err_captures_bad_rows(self, pipeline_results):
         conn, _ = pipeline_results
-        err = conn.execute("SELECT COUNT(*) FROM err_loan").fetchone()[0]
+        err = conn.execute("SELECT COUNT(*) FROM hlx_dev_lnd.lnd_err_loan").fetchone()[0]
         assert err == 2, "bad_amount + empty_id = 2 rejections"
 
     def test_lnd_loan_product_type_lowercased(self, pipeline_results):
         conn, _ = pipeline_results
         types = set(r[0] for r in conn.execute(
-            "SELECT DISTINCT product_type FROM lnd_loan WHERE is_current_flag=TRUE"
+            "SELECT DISTINCT product_type FROM hlx_dev_lnd.lnd_loan WHERE is_current_flag=TRUE"
         ).fetchall())
         assert all(t == t.lower() for t in types if t), "All product_type must be lowercase"
 
     def test_lnd_loan_origination_date_is_date_type(self, pipeline_results):
         conn, _ = pipeline_results
         row = conn.execute(
-            "SELECT origination_date FROM lnd_loan LIMIT 1"
+            "SELECT origination_date FROM hlx_dev_lnd.lnd_loan LIMIT 1"
         ).fetchone()
         assert isinstance(row[0], date), "origination_date must be Python date"
 
     def test_lnd_payment_deduped(self, pipeline_results):
         _, r = pipeline_results
         # 9 raw payments, P000000001 appears twice → 8 unique
-        assert r["lnd_payment"] == 8, "8 unique payment_ids after dedup"
+        assert r["hlx_dev_lnd.lnd_payment"] == 8, "8 unique payment_ids after dedup"
 
     def test_lnd_payment_amount_is_numeric(self, pipeline_results):
         """
@@ -200,7 +200,7 @@ class TestLandingLayer:
         """
         from decimal import Decimal
         conn, _ = pipeline_results
-        row = conn.execute("SELECT amount FROM lnd_payment LIMIT 1").fetchone()
+        row = conn.execute("SELECT amount FROM hlx_dev_lnd.lnd_payment LIMIT 1").fetchone()
         assert isinstance(row[0], (float, Decimal)), \
             f"amount must be numeric in lnd_payment, got {type(row[0])}"
         assert float(row[0]) > 0, "amount must be positive"
@@ -208,7 +208,7 @@ class TestLandingLayer:
     def test_lnd_payment_timestamp_utc(self, pipeline_results):
         conn, _ = pipeline_results
         row = conn.execute(
-            "SELECT payment_timestamp FROM lnd_payment LIMIT 1"
+            "SELECT payment_timestamp FROM hlx_dev_lnd.lnd_payment LIMIT 1"
         ).fetchone()
         ts = row[0]
         assert ts is not None
@@ -217,12 +217,12 @@ class TestLandingLayer:
 class TestDQLayer:
     def test_dq_results_written(self, pipeline_results):
         _, r = pipeline_results
-        assert r["dq_results"] > 0, "DQ results must be written"
+        assert r["hlx_dev_lnd.lnd_dq_audit"] > 0, "DQ results must be written"
 
     def test_dq_ri_orphan_detected(self, pipeline_results):
         conn, _ = pipeline_results
         orphan_check = conn.execute("""
-            SELECT COUNT(*) FROM dq_results
+            SELECT COUNT(*) FROM hlx_dev_lnd.lnd_dq_audit
             WHERE check_name = 'referential_integrity_loan_id'
               AND metric_value > 0
         """).fetchone()[0]
@@ -231,7 +231,7 @@ class TestDQLayer:
     def test_dq_uniqueness_loan_passes(self, pipeline_results):
         conn, _ = pipeline_results
         result = conn.execute("""
-            SELECT check_result FROM dq_results
+            SELECT check_result FROM hlx_dev_lnd.lnd_dq_audit
             WHERE check_name = 'uniqueness_loan_id'
         """).fetchone()
         assert result is not None
@@ -240,7 +240,7 @@ class TestDQLayer:
     def test_dq_uniqueness_payment_passes(self, pipeline_results):
         conn, _ = pipeline_results
         result = conn.execute("""
-            SELECT check_result FROM dq_results
+            SELECT check_result FROM hlx_dev_lnd.lnd_dq_audit
             WHERE check_name = 'uniqueness_payment_id'
         """).fetchone()
         assert result is not None
@@ -255,21 +255,21 @@ class TestStagingLayer:
     def test_stg_emi_derived(self, pipeline_results):
         conn, _ = pipeline_results
         rows_with_emi = conn.execute(
-            "SELECT COUNT(*) FROM stg_loan_payment WHERE expected_emi IS NOT NULL"
+            "SELECT COUNT(*) FROM hlx_dev_stg.stg_loan_payment WHERE expected_emi IS NOT NULL"
         ).fetchone()[0]
         assert rows_with_emi > 0, "EMI must be derived for at least some loans"
 
     def test_stg_delinquency_flag_exists(self, pipeline_results):
         conn, _ = pipeline_results
         result = conn.execute(
-            "SELECT COUNT(*) FROM stg_loan_payment WHERE is_delinquent IS NOT NULL"
+            "SELECT COUNT(*) FROM hlx_dev_stg.stg_loan_payment WHERE is_delinquent IS NOT NULL"
         ).fetchone()[0]
         assert result > 0
 
     def test_stg_left_join_loans_without_payments(self, pipeline_results):
         conn, _ = pipeline_results
         no_payments = conn.execute(
-            "SELECT COUNT(*) FROM stg_loan_payment WHERE payment_id IS NULL"
+            "SELECT COUNT(*) FROM hlx_dev_stg.stg_loan_payment WHERE payment_id IS NULL"
         ).fetchone()[0]
         # L0000003 (closed) and others may have no payments in fixture
         assert no_payments >= 0  # can be 0 or more — just verify column exists
@@ -283,7 +283,7 @@ class TestDimensions:
     def test_dim_customer_credit_score_parsed(self, pipeline_results):
         conn, _ = pipeline_results
         rows = conn.execute(
-            "SELECT COUNT(*) FROM dim_customer WHERE credit_score IS NOT NULL"
+            "SELECT COUNT(*) FROM hlx_dev_dim.dim_customer WHERE credit_score IS NOT NULL"
         ).fetchone()[0]
         assert rows > 0, "credit_score must be parsed from borrower_info"
 
@@ -291,7 +291,7 @@ class TestDimensions:
         conn, _ = pipeline_results
         dups = conn.execute("""
             SELECT COUNT(*) FROM (
-                SELECT customer_id, COUNT(*) c FROM dim_customer
+                SELECT customer_id, COUNT(*) c FROM hlx_dev_dim.dim_customer
                 GROUP BY customer_id HAVING c > 1
             )
         """).fetchone()[0]
@@ -300,7 +300,7 @@ class TestDimensions:
     def test_dim_date_covers_today(self, pipeline_results):
         conn, _ = pipeline_results
         today_count = conn.execute(
-            "SELECT COUNT(*) FROM dim_date WHERE full_date = CURRENT_DATE"
+            "SELECT COUNT(*) FROM hlx_dev_dim.dim_date WHERE full_date = CURRENT_DATE"
         ).fetchone()[0]
         assert today_count == 1, "dim_date must include today"
 
@@ -308,7 +308,7 @@ class TestDimensions:
         conn, _ = pipeline_results
         lower, _ = get_dim_date_bounds()
         count = conn.execute(
-            f"SELECT COUNT(*) FROM dim_date WHERE full_date = '{lower}'"
+            f"SELECT COUNT(*) FROM hlx_dev_dim.dim_date WHERE full_date = '{lower}'"
         ).fetchone()[0]
         assert count == 1, f"dim_date must include lower bound {lower}"
 
@@ -316,14 +316,14 @@ class TestDimensions:
         conn, _ = pipeline_results
         lower, upper = get_dim_date_bounds()
         expected = (upper - lower).days + 1
-        actual   = conn.execute("SELECT COUNT(*) FROM dim_date").fetchone()[0]
+        actual   = conn.execute("SELECT COUNT(*) FROM hlx_dev_dim.dim_date").fetchone()[0]
         assert actual == expected, f"dim_date must have exactly {expected} rows, got {actual}"
 
     def test_dim_date_weekend_flag_saturday(self, pipeline_results):
         conn, _ = pipeline_results
         # Find a known Saturday in the spine
         sat = conn.execute("""
-            SELECT full_date, is_weekend FROM dim_date
+            SELECT full_date, is_weekend FROM hlx_dev_dim.dim_date
             WHERE day_of_week = 6 LIMIT 1
         """).fetchone()
         assert sat is not None
@@ -334,13 +334,13 @@ class TestFacts:
     def test_fct_loan_one_row_per_loan(self, pipeline_results):
         conn, r = pipeline_results
         assert r["fct_loan"] == r["lnd_loan_current"], \
-            "fct_loan must have same row count as lnd_loan current rows"
+            "fct_loan must have same row count as hlx_dev_lnd.lnd_loan current rows"
 
     def test_fct_loan_no_duplicate_loan_ids(self, pipeline_results):
         conn, _ = pipeline_results
         dups = conn.execute("""
             SELECT COUNT(*) FROM (
-                SELECT loan_id, COUNT(*) c FROM fct_loan
+                SELECT loan_id, COUNT(*) c FROM hlx_dev_fct.fct_loan
                 GROUP BY loan_id HAVING c > 1
             )
         """).fetchone()[0]
@@ -348,29 +348,29 @@ class TestFacts:
 
     def test_fct_payment_grain_per_payment(self, pipeline_results):
         """
-        fct_payment will have FEWER rows than lnd_payment when orphan payments exist.
+        fct_payment will have FEWER rows than hlx_dev_lnd.lnd_payment when orphan payments exist.
         P000000006 references L9999999 which is not in lnd_loan.
-        stg = lnd_loan LEFT JOIN lnd_payment excludes payments whose loan_id
+        stg = hlx_dev_lnd.lnd_loan LEFT JOIN hlx_dev_lnd.lnd_payment excludes payments whose loan_id
         has no matching loan. This is CORRECT behaviour — we cannot report facts
         about payments tied to unknown loans.
-        fct_payment = lnd_payment - orphan_payments (RI violations)
+        fct_payment = hlx_dev_lnd.lnd_payment - orphan_payments (RI violations)
         """
         conn, r = pipeline_results
         # Count orphan payments (loan_id not in lnd_loan)
         orphans = conn.execute("""
-            SELECT COUNT(*) FROM lnd_payment p
+            SELECT COUNT(*) FROM hlx_dev_lnd.lnd_payment p
             WHERE p.loan_id IS NOT NULL
-              AND NOT EXISTS (SELECT 1 FROM lnd_loan l WHERE l.loan_id = p.loan_id)
+              AND NOT EXISTS (SELECT 1 FROM hlx_dev_lnd.lnd_loan l WHERE l.loan_id = p.loan_id)
         """).fetchone()[0]
-        expected_fct = r["lnd_payment"] - orphans
+        expected_fct = r["hlx_dev_lnd.lnd_payment"] - orphans
         assert r["fct_payment"] == expected_fct, \
-            f"fct_payment={r['fct_payment']} should be lnd_payment({r['lnd_payment']}) - orphans({orphans})"
+            f"fct_payment={r['fct_payment']} should be lnd_payment({r['hlx_dev_lnd.lnd_payment']}) - orphans({orphans})"
 
     def test_fct_payment_anomaly_flag_set(self, pipeline_results):
         conn, _ = pipeline_results
         # P000000004 paid $9999.99 on L0000004 which had a much lower EMI
         result = conn.execute("""
-            SELECT is_payment_anomalous FROM fct_payment
+            SELECT is_payment_anomalous FROM hlx_dev_fct.fct_payment
             WHERE payment_id = 'P000000004'
         """).fetchone()
         if result:
@@ -379,7 +379,7 @@ class TestFacts:
     def test_fct_loan_customer_enriched(self, pipeline_results):
         conn, _ = pipeline_results
         enriched = conn.execute(
-            "SELECT COUNT(*) FROM fct_loan WHERE credit_score IS NOT NULL"
+            "SELECT COUNT(*) FROM hlx_dev_fct.fct_loan WHERE credit_score IS NOT NULL"
         ).fetchone()[0]
         assert enriched > 0, "fct_loan must be enriched with dim_customer data"
 
@@ -392,7 +392,7 @@ class TestMarts:
     def test_mart_delinquency_rate_between_0_and_100(self, pipeline_results):
         conn, _ = pipeline_results
         bad = conn.execute("""
-            SELECT COUNT(*) FROM mart_delinquency
+            SELECT COUNT(*) FROM hlx_dev_mart.mart_delinquency
             WHERE delinquency_rate_pct < 0 OR delinquency_rate_pct > 100
         """).fetchone()[0]
         assert bad == 0, "Delinquency rate must be 0–100"
@@ -400,14 +400,14 @@ class TestMarts:
     def test_mart_payment_anomaly_populated(self, pipeline_results):
         conn, _ = pipeline_results
         total = conn.execute(
-            "SELECT COUNT(*) FROM mart_payment_anomaly"
+            "SELECT COUNT(*) FROM hlx_dev_mart.mart_payment_anomaly"
         ).fetchone()[0]
         assert total >= 0  # can be 0 if no anomalies in fixture
 
     def test_mart_payment_anomaly_has_reason(self, pipeline_results):
         conn, _ = pipeline_results
         bad = conn.execute("""
-            SELECT COUNT(*) FROM mart_payment_anomaly
+            SELECT COUNT(*) FROM hlx_dev_mart.mart_payment_anomaly
             WHERE anomaly_reason IS NULL
         """).fetchone()[0]
         assert bad == 0, "Every anomaly row must have a reason"
@@ -419,14 +419,14 @@ class TestMarts:
     def test_mart_observability_has_freshness(self, pipeline_results):
         conn, _ = pipeline_results
         nulls = conn.execute(
-            "SELECT COUNT(*) FROM mart_data_observability WHERE freshness_hours IS NULL"
+            "SELECT COUNT(*) FROM hlx_dev_mart.mart_data_observability WHERE freshness_hours IS NULL"
         ).fetchone()[0]
         assert nulls == 0, "All observability rows must have freshness_hours"
 
     def test_mart_observability_pipeline_status(self, pipeline_results):
         conn, _ = pipeline_results
         statuses = set(r[0] for r in conn.execute(
-            "SELECT DISTINCT pipeline_status FROM mart_data_observability"
+            "SELECT DISTINCT pipeline_status FROM hlx_dev_mart.mart_data_observability"
         ).fetchall())
         assert statuses.issubset({"PASS", "FAIL"}), \
             "pipeline_status must be PASS or FAIL"
@@ -437,8 +437,10 @@ class TestMarts:
 # ---------------------------------------------------------------------------
 
 def _create_raw_tables(conn):
+    conn.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_raw")
+    conn.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_lnd")
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS raw_loan (
+        CREATE TABLE IF NOT EXISTS hlx_dev_raw.raw_loan (
             loan_id VARCHAR, customer_id VARCHAR, product_type VARCHAR,
             principal_amount VARCHAR, interest_rate VARCHAR, term_months VARCHAR,
             origination_date VARCHAR, origination_channel VARCHAR,
@@ -446,7 +448,7 @@ def _create_raw_tables(conn):
             _source_file VARCHAR, _last_updated_ts TIMESTAMP
         )""")
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS raw_payment (
+        CREATE TABLE IF NOT EXISTS hlx_dev_raw.raw_payment (
             payment_id VARCHAR, loan_id VARCHAR, amount VARCHAR,
             payment_timestamp VARCHAR, payment_method_type VARCHAR,
             payment_method_last_four VARCHAR, payment_method_bank VARCHAR,
@@ -454,7 +456,7 @@ def _create_raw_tables(conn):
             _source_file VARCHAR, _last_updated_ts TIMESTAMP
         )""")
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS err_loan (
+        CREATE TABLE IF NOT EXISTS hlx_dev_lnd.lnd_err_loan (
             loan_id VARCHAR, customer_id VARCHAR, product_type VARCHAR,
             principal_amount VARCHAR, interest_rate VARCHAR, term_months VARCHAR,
             origination_date VARCHAR, origination_channel VARCHAR,
@@ -463,7 +465,7 @@ def _create_raw_tables(conn):
             _rejection_reason VARCHAR, _rejected_at TIMESTAMP
         )""")
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS err_payment (
+        CREATE TABLE IF NOT EXISTS hlx_dev_lnd.lnd_err_payment (
             payment_id VARCHAR, loan_id VARCHAR, amount VARCHAR,
             payment_timestamp VARCHAR, payment_method_type VARCHAR,
             payment_method_last_four VARCHAR, payment_method_bank VARCHAR,
@@ -478,7 +480,7 @@ def _ingest_raw_loan(conn, path, batch_ts, source_file):
         reader = csv.DictReader(f)
         for row in reader:
             conn.execute(
-                "INSERT INTO raw_loan VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO hlx_dev_raw.raw_loan VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 [row.get(c) or None for c in [
                     "loan_id","customer_id","product_type","principal_amount",
                     "interest_rate","term_months","origination_date",
@@ -499,7 +501,7 @@ def _ingest_raw_payment(conn, path, batch_ts, source_file):
                 det = pm.get("details") or {}
                 meta = r.get("metadata") or {}
                 conn.execute(
-                    "INSERT INTO raw_payment VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO hlx_dev_raw.raw_payment VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     [
                         str(r.get("payment_id")) if r.get("payment_id") else None,
                         str(r.get("loan_id")) if r.get("loan_id") else None,
@@ -515,7 +517,7 @@ def _ingest_raw_payment(conn, path, batch_ts, source_file):
                 )
             except Exception as e:
                 conn.execute(
-                    "INSERT INTO err_payment VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO hlx_dev_lnd.lnd_err_payment VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     [None]*9 + [source_file, batch_ts,
                                 f"Line {i}: {e}",
                                 datetime.now(timezone.utc)]
@@ -523,8 +525,9 @@ def _ingest_raw_payment(conn, path, batch_ts, source_file):
 
 
 def _create_lnd_tables(conn):
+    conn.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_lnd")
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS lnd_loan (
+        CREATE TABLE IF NOT EXISTS hlx_dev_lnd.lnd_loan (
             loan_id VARCHAR, customer_id VARCHAR, product_type VARCHAR,
             principal_amount DECIMAL(18,2), interest_rate DECIMAL(8,4),
             term_months INTEGER, origination_date DATE,
@@ -534,7 +537,7 @@ def _create_lnd_tables(conn):
             _last_updated_ts TIMESTAMP, _row_hash VARCHAR
         )""")
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS lnd_payment (
+        CREATE TABLE IF NOT EXISTS hlx_dev_lnd.lnd_payment (
             payment_id VARCHAR, loan_id VARCHAR,
             amount DECIMAL(18,2), payment_timestamp TIMESTAMPTZ,
             payment_method_type VARCHAR, payment_method_last_four VARCHAR,
@@ -547,16 +550,16 @@ def _create_lnd_tables(conn):
 def _transform_lnd_loan(conn, batch_ts):
     import hashlib
     rows = conn.execute(
-        "SELECT * FROM raw_loan WHERE _last_updated_ts = (SELECT MAX(_last_updated_ts) FROM raw_loan)"
+        "SELECT * FROM hlx_dev_raw.raw_loan WHERE _last_updated_ts = (SELECT MAX(_last_updated_ts) FROM hlx_dev_raw.raw_loan)"
     ).fetchall()
-    cols = [d[0] for d in conn.execute("SELECT * FROM raw_loan LIMIT 0").description]
+    cols = [d[0] for d in conn.execute("SELECT * FROM hlx_dev_raw.raw_loan LIMIT 0").description]
 
     for row in rows:
         d = dict(zip(cols, row))
         loan_id = clean_string(d.get("loan_id"))
         if not loan_id:
             conn.execute(
-                "INSERT INTO err_loan VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO hlx_dev_lnd.lnd_err_loan VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 list(row) + ["empty loan_id", datetime.now(timezone.utc)]
             )
             continue
@@ -570,7 +573,7 @@ def _transform_lnd_loan(conn, batch_ts):
             channel   = normalise_category(d.get("origination_channel"))
         except Exception as e:
             conn.execute(
-                "INSERT INTO err_loan VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO hlx_dev_lnd.lnd_err_loan VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 list(row) + [str(e), datetime.now(timezone.utc)]
             )
             continue
@@ -582,13 +585,13 @@ def _transform_lnd_loan(conn, batch_ts):
         row_hash = hashlib.md5(hash_input.encode()).hexdigest()
 
         existing = conn.execute(
-            "SELECT _row_hash FROM lnd_loan WHERE loan_id=? AND is_current_flag=TRUE",
+            "SELECT _row_hash FROM hlx_dev_lnd.lnd_loan WHERE loan_id=? AND is_current_flag=TRUE",
             [loan_id]
         ).fetchone()
 
         if existing is None:
             conn.execute(
-                "INSERT INTO lnd_loan VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO hlx_dev_lnd.lnd_loan VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 [loan_id, clean_string(d.get("customer_id")), product,
                  principal, rate, term, orig_date, channel, status,
                  clean_string(d.get("borrower_info")),
@@ -597,11 +600,11 @@ def _transform_lnd_loan(conn, batch_ts):
             )
         elif existing[0] != row_hash:
             conn.execute(
-                "UPDATE lnd_loan SET is_current_flag=FALSE, row_effective_to=CURRENT_DATE "
+                "UPDATE hlx_dev_lnd.lnd_loan SET is_current_flag=FALSE, row_effective_to=CURRENT_DATE "
                 "WHERE loan_id=? AND is_current_flag=TRUE", [loan_id]
             )
             conn.execute(
-                "INSERT INTO lnd_loan VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO hlx_dev_lnd.lnd_loan VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 [loan_id, clean_string(d.get("customer_id")), product,
                  principal, rate, term, orig_date, channel, status,
                  clean_string(d.get("borrower_info")),
@@ -612,12 +615,12 @@ def _transform_lnd_loan(conn, batch_ts):
 
 def _transform_lnd_payment(conn, batch_ts):
     existing_ids = set(r[0] for r in conn.execute(
-        "SELECT payment_id FROM lnd_payment"
+        "SELECT payment_id FROM hlx_dev_lnd.lnd_payment"
     ).fetchall())
     rows = conn.execute(
-        "SELECT * FROM raw_payment WHERE _last_updated_ts=(SELECT MAX(_last_updated_ts) FROM raw_payment)"
+        "SELECT * FROM hlx_dev_raw.raw_payment WHERE _last_updated_ts=(SELECT MAX(_last_updated_ts) FROM hlx_dev_raw.raw_payment)"
     ).fetchall()
-    cols = [d[0] for d in conn.execute("SELECT * FROM raw_payment LIMIT 0").description]
+    cols = [d[0] for d in conn.execute("SELECT * FROM hlx_dev_raw.raw_payment LIMIT 0").description]
 
     for row in rows:
         d = dict(zip(cols, row))
@@ -629,12 +632,12 @@ def _transform_lnd_payment(conn, batch_ts):
             ts     = parse_timestamp_utc(d.get("payment_timestamp"))
         except Exception as e:
             conn.execute(
-                "INSERT INTO err_payment VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO hlx_dev_lnd.lnd_err_payment VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 list(row) + [str(e), datetime.now(timezone.utc)]
             )
             continue
         conn.execute(
-            "INSERT INTO lnd_payment VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO hlx_dev_lnd.lnd_payment VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             [pid, clean_string(d.get("loan_id")), amount, ts,
              normalise_category(d.get("payment_method_type")),
              clean_string(d.get("payment_method_last_four")),
@@ -647,8 +650,9 @@ def _transform_lnd_payment(conn, batch_ts):
 
 
 def _create_dq_results(conn):
+    conn.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_lnd")
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS dq_results (
+        CREATE TABLE IF NOT EXISTS hlx_dev_lnd.lnd_dq_audit (
             run_id VARCHAR, table_name VARCHAR, check_name VARCHAR,
             check_result VARCHAR, metric_value DOUBLE, threshold DOUBLE,
             breach_flag BOOLEAN, detail VARCHAR, checked_at TIMESTAMP
@@ -656,29 +660,30 @@ def _create_dq_results(conn):
 
 
 def _run_dq_loan(conn, batch_date) -> dict:
+    conn.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_lnd")
     ts   = datetime.now(timezone.utc)
     run  = f"dq_lnd_loan_{batch_date}"
     total = conn.execute(
-        "SELECT COUNT(*) FROM lnd_loan WHERE is_current_flag=TRUE"
+        "SELECT COUNT(*) FROM hlx_dev_lnd.lnd_loan WHERE is_current_flag=TRUE"
     ).fetchone()[0]
-    raw_total = conn.execute("SELECT COUNT(*) FROM raw_loan").fetchone()[0]
-    err_total = conn.execute("SELECT COUNT(*) FROM err_loan").fetchone()[0]
+    raw_total = conn.execute("SELECT COUNT(*) FROM hlx_dev_raw.raw_loan").fetchone()[0]
+    err_total = conn.execute("SELECT COUNT(*) FROM hlx_dev_lnd.lnd_err_loan").fetchone()[0]
     accepted  = raw_total - err_total
     rate      = accepted / raw_total if raw_total > 0 else 0.0
     breach    = rate < 0.99
 
-    conn.execute("INSERT INTO dq_results VALUES (?,?,?,?,?,?,?,?,?)",
-        [run, "lnd_loan", "volume_acceptance_rate",
+    conn.execute("INSERT INTO hlx_dev_lnd.lnd_dq_audit VALUES (?,?,?,?,?,?,?,?,?)",
+        [run, "hlx_dev_lnd.lnd_loan", "volume_acceptance_rate",
          "FAIL" if breach else "PASS",
          rate, 0.99, breach, f"{accepted}/{raw_total}", ts])
 
     dups = conn.execute("""
         SELECT COUNT(*) FROM (
-            SELECT loan_id, COUNT(*) c FROM lnd_loan
+            SELECT loan_id, COUNT(*) c FROM hlx_dev_lnd.lnd_loan
             WHERE is_current_flag=TRUE GROUP BY loan_id HAVING c > 1)
     """).fetchone()[0]
-    conn.execute("INSERT INTO dq_results VALUES (?,?,?,?,?,?,?,?,?)",
-        [run, "lnd_loan", "uniqueness_loan_id",
+    conn.execute("INSERT INTO hlx_dev_lnd.lnd_dq_audit VALUES (?,?,?,?,?,?,?,?,?)",
+        [run, "hlx_dev_lnd.lnd_loan", "uniqueness_loan_id",
          "FAIL" if dups > 0 else "PASS",
          float(dups), 0.0, dups > 0, f"{dups} duplicates", ts])
 
@@ -686,36 +691,37 @@ def _run_dq_loan(conn, batch_date) -> dict:
 
 
 def _run_dq_payment(conn, batch_date) -> dict:
+    conn.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_lnd")
     ts   = datetime.now(timezone.utc)
     run  = f"dq_lnd_payment_{batch_date}"
-    raw_total = conn.execute("SELECT COUNT(*) FROM raw_payment").fetchone()[0]
-    err_total = conn.execute("SELECT COUNT(*) FROM err_payment").fetchone()[0]
+    raw_total = conn.execute("SELECT COUNT(*) FROM hlx_dev_raw.raw_payment").fetchone()[0]
+    err_total = conn.execute("SELECT COUNT(*) FROM hlx_dev_lnd.lnd_err_payment").fetchone()[0]
     accepted  = raw_total - err_total
     rate      = accepted / raw_total if raw_total > 0 else 0.0
     breach    = rate < 0.99
 
-    conn.execute("INSERT INTO dq_results VALUES (?,?,?,?,?,?,?,?,?)",
-        [run, "lnd_payment", "volume_acceptance_rate",
+    conn.execute("INSERT INTO hlx_dev_lnd.lnd_dq_audit VALUES (?,?,?,?,?,?,?,?,?)",
+        [run, "hlx_dev_lnd.lnd_payment", "volume_acceptance_rate",
          "FAIL" if breach else "PASS",
          rate, 0.99, breach, f"{accepted}/{raw_total}", ts])
 
     dups = conn.execute("""
         SELECT COUNT(*) FROM (
-            SELECT payment_id, COUNT(*) c FROM lnd_payment
+            SELECT payment_id, COUNT(*) c FROM hlx_dev_lnd.lnd_payment
             GROUP BY payment_id HAVING c > 1)
     """).fetchone()[0]
-    conn.execute("INSERT INTO dq_results VALUES (?,?,?,?,?,?,?,?,?)",
-        [run, "lnd_payment", "uniqueness_payment_id",
+    conn.execute("INSERT INTO hlx_dev_lnd.lnd_dq_audit VALUES (?,?,?,?,?,?,?,?,?)",
+        [run, "hlx_dev_lnd.lnd_payment", "uniqueness_payment_id",
          "FAIL" if dups > 0 else "PASS",
          float(dups), 0.0, dups > 0, f"{dups} duplicates", ts])
 
     orphans = conn.execute("""
-        SELECT COUNT(*) FROM lnd_payment p
+        SELECT COUNT(*) FROM hlx_dev_lnd.lnd_payment p
         WHERE p.loan_id IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM lnd_loan l WHERE l.loan_id = p.loan_id)
+          AND NOT EXISTS (SELECT 1 FROM hlx_dev_lnd.lnd_loan l WHERE l.loan_id = p.loan_id)
     """).fetchone()[0]
-    conn.execute("INSERT INTO dq_results VALUES (?,?,?,?,?,?,?,?,?)",
-        [run, "lnd_payment", "referential_integrity_loan_id",
+    conn.execute("INSERT INTO hlx_dev_lnd.lnd_dq_audit VALUES (?,?,?,?,?,?,?,?,?)",
+        [run, "hlx_dev_lnd.lnd_payment", "referential_integrity_loan_id",
          "FAIL" if orphans > 0 else "PASS",
          float(orphans), 0.0, orphans > 0, f"{orphans} orphan loan_ids", ts])
 
@@ -723,8 +729,9 @@ def _run_dq_payment(conn, batch_date) -> dict:
 
 
 def _build_stg(conn):
+    conn.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_stg")
     conn.execute(f"""
-        CREATE OR REPLACE TABLE stg_loan_payment AS
+        CREATE OR REPLACE TABLE hlx_dev_stg.stg_loan_payment AS
         SELECT
             l.loan_id, l.customer_id, l.product_type,
             l.principal_amount, l.interest_rate, l.term_months,
@@ -776,16 +783,17 @@ def _build_stg(conn):
                     END, 0) > {EMI_TOLERANCE_PCT}
             END AS is_payment_anomalous,
             CURRENT_TIMESTAMP AS _last_updated_ts
-        FROM lnd_loan l
-        LEFT JOIN lnd_payment p ON l.loan_id = p.loan_id
+        FROM hlx_dev_lnd.lnd_loan l
+        LEFT JOIN hlx_dev_lnd.lnd_payment p ON l.loan_id = p.loan_id
         WHERE l.is_current_flag = TRUE
     """)
 
 
 def _build_dim_customer(conn, batch_ts):
+    conn.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_dim")
     import json as _json
     conn.execute("""
-        CREATE OR REPLACE TABLE dim_customer (
+        CREATE OR REPLACE TABLE hlx_dev_dim.dim_customer (
             customer_id VARCHAR, credit_score INTEGER,
             employment_type VARCHAR, annual_income DECIMAL(18,2),
             years_employed INTEGER, _source_loan_id VARCHAR,
@@ -793,7 +801,7 @@ def _build_dim_customer(conn, batch_ts):
         )""")
     rows = conn.execute("""
         SELECT DISTINCT ON (customer_id) customer_id, borrower_info, loan_id
-        FROM lnd_loan WHERE is_current_flag=TRUE AND customer_id IS NOT NULL
+        FROM hlx_dev_lnd.lnd_loan WHERE is_current_flag=TRUE AND customer_id IS NOT NULL
         ORDER BY customer_id, origination_date DESC
     """).fetchall()
     for cid, bi, lid in rows:
@@ -801,7 +809,7 @@ def _build_dim_customer(conn, batch_ts):
             d = _json.loads(bi) if bi else {}
         except Exception:
             d = {}
-        conn.execute("INSERT INTO dim_customer VALUES (?,?,?,?,?,?,?)", [
+        conn.execute("INSERT INTO hlx_dev_dim.dim_customer VALUES (?,?,?,?,?,?,?)", [
             cid,
             int(d["credit_score"]) if d.get("credit_score") else None,
             str(d["employment"]).lower() if d.get("employment") else None,
@@ -812,14 +820,15 @@ def _build_dim_customer(conn, batch_ts):
 
 
 def _build_dim_date(conn):
+    conn.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_dim")
     from datetime import timedelta
     MONTH_NAMES = ["","January","February","March","April","May","June",
                    "July","August","September","October","November","December"]
     DAY_NAMES   = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
     lower, upper = get_dim_date_bounds()
-    conn.execute("DROP TABLE IF EXISTS dim_date")
+    conn.execute("DROP TABLE IF EXISTS hlx_dev_dim.dim_date")
     conn.execute("""
-        CREATE TABLE dim_date (
+        CREATE TABLE hlx_dev_dim.dim_date (
             date_id INTEGER PRIMARY KEY, full_date DATE,
             year INTEGER, quarter INTEGER, month INTEGER,
             month_name VARCHAR, week_of_year INTEGER,
@@ -838,12 +847,13 @@ def _build_dim_date(conn):
             iso[2] >= 6, nxt.month != cur.month,
         ])
         cur = nxt
-    conn.executemany("INSERT INTO dim_date VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+    conn.executemany("INSERT INTO hlx_dev_dim.dim_date VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows)
 
 
 def _build_fct_loan(conn):
+    conn.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_fct")
     conn.execute("""
-        CREATE OR REPLACE TABLE fct_loan AS
+        CREATE OR REPLACE TABLE hlx_dev_fct.fct_loan AS
         SELECT
             s.loan_id, s.customer_id, s.product_type,
             s.principal_amount, s.interest_rate, s.term_months,
@@ -858,9 +868,9 @@ def _build_fct_loan(conn):
             SUM(s.payment_amount)   AS total_paid_amount,
             c.credit_score, c.employment_type, c.annual_income,
             CURRENT_TIMESTAMP AS _last_updated_ts
-        FROM stg_loan_payment s
-        LEFT JOIN dim_customer c ON s.customer_id = c.customer_id
-        LEFT JOIN dim_date d ON d.full_date = s.origination_date
+        FROM hlx_dev_stg.stg_loan_payment s
+        LEFT JOIN hlx_dev_dim.dim_customer c ON s.customer_id = c.customer_id
+        LEFT JOIN hlx_dev_dim.dim_date d ON d.full_date = s.origination_date
         GROUP BY s.loan_id, s.customer_id, s.product_type,
             s.principal_amount, s.interest_rate, s.term_months,
             s.origination_date, d.date_id, s.origination_channel,
@@ -870,8 +880,9 @@ def _build_fct_loan(conn):
 
 
 def _build_fct_payment(conn):
+    conn.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_fct")
     conn.execute("""
-        CREATE OR REPLACE TABLE fct_payment AS
+        CREATE OR REPLACE TABLE hlx_dev_fct.fct_payment AS
         SELECT
             s.payment_id, s.loan_id, s.customer_id, s.product_type,
             s.payment_amount, s.payment_timestamp,
@@ -880,15 +891,16 @@ def _build_fct_payment(conn):
             s.metadata_source, s.expected_emi,
             s.is_payment_anomalous, s.days_since_payment,
             s.loan_status, CURRENT_TIMESTAMP AS _last_updated_ts
-        FROM stg_loan_payment s
-        LEFT JOIN dim_date d ON d.full_date = CAST(s.payment_timestamp AS DATE)
+        FROM hlx_dev_stg.stg_loan_payment s
+        LEFT JOIN hlx_dev_dim.dim_date d ON d.full_date = CAST(s.payment_timestamp AS DATE)
         WHERE s.payment_id IS NOT NULL
     """)
 
 
 def _build_mart_delinquency(conn):
+    conn.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_mart")
     conn.execute(f"""
-        CREATE OR REPLACE TABLE mart_delinquency AS
+        CREATE OR REPLACE TABLE hlx_dev_mart.mart_delinquency AS
         SELECT
             COALESCE(product_type, 'unknown') AS product_type,
             CURRENT_DATE AS run_date,
@@ -901,14 +913,15 @@ def _build_mart_delinquency(conn):
             ROUND(AVG(CASE WHEN is_delinquent THEN principal_amount END),2)
                 AS avg_principal_delinquent,
             CURRENT_TIMESTAMP AS _last_updated_ts
-        FROM fct_loan WHERE loan_status='active'
+        FROM hlx_dev_fct.fct_loan WHERE loan_status='active'
         GROUP BY product_type ORDER BY delinquency_rate_pct DESC
     """)
 
 
 def _build_mart_payment_anomaly(conn):
+    conn.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_mart")
     conn.execute(f"""
-        CREATE OR REPLACE TABLE mart_payment_anomaly AS
+        CREATE OR REPLACE TABLE hlx_dev_mart.mart_payment_anomaly AS
         SELECT
             p.payment_id, p.loan_id, p.customer_id, p.product_type,
             p.payment_amount, p.expected_emi,
@@ -921,14 +934,15 @@ def _build_mart_payment_anomaly(conn):
                 ELSE 'ANOMALOUS'
             END AS anomaly_reason,
             CURRENT_TIMESTAMP AS _last_updated_ts
-        FROM fct_payment p WHERE p.is_payment_anomalous=TRUE
+        FROM hlx_dev_fct.fct_payment p WHERE p.is_payment_anomalous=TRUE
         ORDER BY deviation_pct DESC
     """)
 
 
 def _build_mart_observability(conn, batch_ts, batch_date_str):
+    conn.execute("CREATE SCHEMA IF NOT EXISTS hlx_dev_mart")
     conn.execute("""
-        CREATE OR REPLACE TABLE mart_data_observability (
+        CREATE OR REPLACE TABLE hlx_dev_mart.mart_data_observability (
             run_date DATE, source_name VARCHAR,
             raw_rows_in_batch INTEGER, lnd_rows_accepted INTEGER,
             lnd_rows_rejected INTEGER, acceptance_rate_pct DECIMAL(6,2),
@@ -938,17 +952,19 @@ def _build_mart_observability(conn, batch_ts, batch_date_str):
             pipeline_status VARCHAR, _last_updated_ts TIMESTAMP
         )""")
     for src in ("loan", "payment"):
-        raw_t = f"raw_{src}"; err_t = f"err_{src}"
-        fct_t = "fct_loan" if src == "loan" else "fct_payment"
+        raw_t = f"hlx_dev_raw.raw_{src}"
+        err_t = f"hlx_dev_lnd.lnd_err_{src}"
+        fct_t = "hlx_dev_fct.fct_loan" if src == "loan" else "hlx_dev_fct.fct_payment"
+        lnd_t = f"hlx_dev_lnd.lnd_{src}"
         raw_n = conn.execute(f"SELECT COUNT(*) FROM {raw_t}").fetchone()[0]
         err_n = conn.execute(f"SELECT COUNT(*) FROM {err_t}").fetchone()[0]
         acc   = raw_n - err_n
         rate  = round(acc*100.0/raw_n, 2) if raw_n > 0 else 0.0
         dq_t  = conn.execute(
-            f"SELECT COUNT(*) FROM dq_results WHERE table_name='lnd_{src}'"
+            f"SELECT COUNT(*) FROM hlx_dev_lnd.lnd_dq_audit WHERE table_name='{lnd_t}'"
         ).fetchone()[0]
         dq_f  = conn.execute(
-            f"SELECT COUNT(*) FROM dq_results WHERE table_name='lnd_{src}' AND check_result='FAIL'"
+            f"SELECT COUNT(*) FROM hlx_dev_lnd.lnd_dq_audit WHERE table_name='{lnd_t}' AND check_result='FAIL'"
         ).fetchone()[0]
         fct_n = conn.execute(f"SELECT COUNT(*) FROM {fct_t}").fetchone()[0]
         lt    = conn.execute(f"SELECT MAX(_last_updated_ts) FROM {raw_t}").fetchone()[0]
@@ -956,7 +972,7 @@ def _build_mart_observability(conn, batch_ts, batch_date_str):
         if lt:
             ltu = lt.replace(tzinfo=timezone.utc) if lt.tzinfo is None else lt
             fh  = round((batch_ts - ltu).total_seconds()/3600, 2)
-        conn.execute("INSERT INTO mart_data_observability VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        conn.execute("INSERT INTO hlx_dev_mart.mart_data_observability VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [batch_date_str, src, raw_n, acc, err_n, rate,
              dq_t, dq_f, dq_f>0, fct_n, lt, fh,
              "FAIL" if dq_f>0 else "PASS", batch_ts])

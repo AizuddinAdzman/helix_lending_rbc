@@ -10,7 +10,19 @@ A production-quality data pipeline ingesting loan origination and payment event 
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+
+#macOS
+source .venv/bin/activate        
+
+# Windows: 
+.venv\Scripts\activate
+
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+
+# Windows Command Prompt (cmd.exe)
+.\.venv\Scripts\activate.bat
+
 pip install -r requirements.txt
 ```
 

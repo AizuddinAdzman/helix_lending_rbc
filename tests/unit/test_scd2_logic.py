@@ -27,7 +27,7 @@ from datetime import date
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 import pytest
-from assets.landing.lnd_loan import _compute_hash, _clean_loan_row
+from assets.landing.lnd_loan import _hash as _compute_hash, _clean_row as _clean_loan_row
 
 
 class TestComputeHash:

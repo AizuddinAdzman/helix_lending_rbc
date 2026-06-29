@@ -1,25 +1,10 @@
 """
 assets/transformation/dim_customer.py
 ---------------------------------------
-Dagster asset: dim_customer
-
-Responsibility:
-    Flatten borrower_info JSON from lnd_loan into dim_customer.
-    One row per customer_id (latest known snapshot).
-
-    borrower_info JSON schema (undocumented — inferred from data):
-        credit_score    INTEGER
-        employment      VARCHAR  (salaried, self-employed, unemployed)
-        annual_income   DECIMAL
-        years_employed  INTEGER
-
-Design decision:
-    Missing JSON fields → NULL (not an error).
-    Malformed JSON → row written with all fields NULL + warning logged.
-    Grain: one row per customer_id (deduped on latest origination_date).
+Schema: hlx_{ENV}_dim
+Reads from: hlx_{ENV}_lnd
+Sequential after stg_loan_payment.
 """
-
-from __future__ import annotations
 
 import json
 import time
@@ -32,149 +17,115 @@ from dagster import asset, Output, MetadataValue
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from config import (
+    TBL_LND_LOAN, TBL_DIM_CUSTOMER, SCHEMA_DIM,
+)
 from resources.duckdb_resource import DuckDBResource
 from utils.logger import get_logger, log_event
 
 logger = get_logger(__name__)
 
-DDL_DIM_CUSTOMER = """
-CREATE OR REPLACE TABLE dim_customer (
-    customer_id         VARCHAR       NOT NULL,
-    credit_score        INTEGER,
-    employment_type     VARCHAR,
-    annual_income       DECIMAL(18,2),
-    years_employed      INTEGER,
-    _source_loan_id     VARCHAR,
-    _last_updated_ts    TIMESTAMP
-)
-"""
-
 
 @asset(
     group_name="transformation",
     deps=["stg_loan_payment"],
-    description="Flatten borrower_info JSON → dim_customer (one row per customer)",
+    description=f"Flatten borrower_info JSON → {TBL_DIM_CUSTOMER}",
 )
-def dim_customer(
-    context,
-    duckdb_resource: DuckDBResource,
-) -> Output:
+def dim_customer(context, duckdb_resource: DuckDBResource) -> Output:
     start_time     = time.time()
-    batch_date_str = datetime.now(timezone.utc).date().isoformat()
     batch_ts       = datetime.now(timezone.utc)
+    batch_date_str = batch_ts.date().isoformat()
 
-    log_event(
-        logger, event="load_start", layer="dim", table="dim_customer",
-        message="Starting dim_customer build from lnd_loan.borrower_info",
-        batch_date=batch_date_str,
-    )
+    log_event(logger, event="load_start", layer="dim", table=TBL_DIM_CUSTOMER,
+              message="Building dim_customer", batch_date=batch_date_str)
 
     with duckdb_resource.get_connection() as conn:
-        conn.execute(DDL_DIM_CUSTOMER)
-
-        # Pull latest snapshot per customer (most recent origination_date)
-        raw_rows = conn.execute("""
+        raw_rows = conn.execute(f"""
             SELECT DISTINCT ON (customer_id)
-                customer_id,
-                borrower_info,
-                loan_id
-            FROM lnd_loan
-            WHERE is_current_flag = TRUE
-              AND customer_id IS NOT NULL
+                customer_id, borrower_info, loan_id
+            FROM {TBL_LND_LOAN}
+            WHERE is_current_flag = TRUE AND customer_id IS NOT NULL
             ORDER BY customer_id, origination_date DESC
         """).fetchall()
 
-    rows_in       = len(raw_rows)
-    rows_inserted = 0
-    rows_warned   = 0
-    to_insert     = []
+    rows_in = len(raw_rows)
+    to_insert = []
+    rows_warned = 0
 
     for customer_id, borrower_info, loan_id in raw_rows:
-        parsed = _parse_borrower_info(borrower_info, customer_id)
+        parsed = _parse(borrower_info)
         if parsed.get("_warn"):
             rows_warned += 1
-            log_event(
-                logger, event="checkpoint", layer="dim", table="dim_customer",
-                message=f"Malformed borrower_info for customer_id={customer_id}",
-                batch_date=batch_date_str, level="WARNING",
-            )
-
+            log_event(logger, event="checkpoint", layer="dim",
+                      table=TBL_DIM_CUSTOMER,
+                      message=f"Malformed borrower_info for {customer_id}",
+                      batch_date=batch_date_str, level="WARNING")
         to_insert.append([
             customer_id,
             parsed.get("credit_score"),
             parsed.get("employment"),
             parsed.get("annual_income"),
             parsed.get("years_employed"),
-            loan_id,
-            batch_ts,
+            loan_id, batch_ts,
         ])
 
     with duckdb_resource.get_connection() as conn:
-        conn.execute(DDL_DIM_CUSTOMER)
+        conn.execute(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA_DIM}")
+        conn.execute(f"""
+            CREATE OR REPLACE TABLE {TBL_DIM_CUSTOMER} (
+                customer_id VARCHAR NOT NULL,
+                credit_score INTEGER, employment_type VARCHAR,
+                annual_income DECIMAL(18,2), years_employed INTEGER,
+                _source_loan_id VARCHAR, _last_updated_ts TIMESTAMP
+            )""")
         if to_insert:
             conn.executemany(
-                "INSERT INTO dim_customer VALUES (?,?,?,?,?,?,?)",
+                f"INSERT INTO {TBL_DIM_CUSTOMER} VALUES (?,?,?,?,?,?,?)",
                 to_insert,
             )
-            rows_inserted = len(to_insert)
-
-        total = conn.execute("SELECT COUNT(*) FROM dim_customer").fetchone()[0]
+        total = conn.execute(f"SELECT COUNT(*) FROM {TBL_DIM_CUSTOMER}").fetchone()[0]
 
     duration = round(time.time() - start_time, 3)
-
-    log_event(
-        logger, event="load_end", layer="dim", table="dim_customer",
-        message=f"dim_customer complete: {rows_inserted} rows, {rows_warned} warnings",
-        rows_in=rows_in, rows_out=rows_inserted,
-        duration_sec=duration, batch_date=batch_date_str,
-    )
-
+    log_event(logger, event="load_end", layer="dim", table=TBL_DIM_CUSTOMER,
+              message=f"dim_customer complete: {total} rows, {rows_warned} warnings",
+              rows_in=rows_in, rows_out=total,
+              duration_sec=duration, batch_date=batch_date_str)
     context.add_output_metadata({
-        "rows_inserted":   MetadataValue.int(rows_inserted),
-        "rows_warned":     MetadataValue.int(rows_warned),
-        "total_in_table":  MetadataValue.int(total),
-        "duration_sec":    MetadataValue.float(duration),
+        "rows_inserted": MetadataValue.int(total),
+        "rows_warned":   MetadataValue.int(rows_warned),
+        "duration_sec":  MetadataValue.float(duration),
+        "table":         MetadataValue.text(TBL_DIM_CUSTOMER),
     })
+    return Output(value={"rows_inserted": total})
 
-    return Output(value={"rows_inserted": rows_inserted})
 
-
-def _parse_borrower_info(raw: Optional[str], customer_id: str) -> dict:
-    """
-    Parse borrower_info JSON string.
-    Returns dict with keys: credit_score, employment, annual_income, years_employed.
-    Missing keys → None. Malformed JSON → all None + _warn=True.
-    """
+def _parse(raw: Optional[str]) -> dict:
     if not raw or not raw.strip():
         return {"_warn": False}
     try:
-        data = json.loads(raw)
+        d = json.loads(raw)
         return {
-            "credit_score":   _safe_int(data.get("credit_score")),
-            "employment":     str(data["employment"]).strip().lower()
-                              if data.get("employment") else None,
-            "annual_income":  _safe_float(data.get("annual_income")),
-            "years_employed": _safe_int(data.get("years_employed")),
+            "credit_score":   _int(d.get("credit_score")),
+            "employment":     str(d["employment"]).strip().lower()
+                              if d.get("employment") else None,
+            "annual_income":  _float(d.get("annual_income")),
+            "years_employed": _int(d.get("years_employed")),
             "_warn":          False,
         }
-    except (json.JSONDecodeError, Exception):
-        return {
-            "credit_score": None, "employment": None,
-            "annual_income": None, "years_employed": None,
-            "_warn": True,
-        }
+    except Exception:
+        return {"credit_score": None, "employment": None,
+                "annual_income": None, "years_employed": None, "_warn": True}
 
 
-def _safe_int(val) -> Optional[int]:
+def _int(v) -> Optional[int]:
     try:
-        return int(val) if val is not None else None
-    except (ValueError, TypeError):
+        return int(v) if v is not None else None
+    except Exception:
         return None
 
 
-def _safe_float(val) -> Optional[float]:
+def _float(v) -> Optional[float]:
     try:
-        return float(val) if val is not None else None
-    except (ValueError, TypeError):
+        return float(v) if v is not None else None
+    except Exception:
         return None
-    
