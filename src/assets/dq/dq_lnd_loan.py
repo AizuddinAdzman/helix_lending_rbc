@@ -28,7 +28,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from dagster import asset, AssetExecutionContext, Output, MetadataValue
+from dagster import asset, Output, MetadataValue
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -66,11 +66,11 @@ CRITICAL_COLUMNS = [
 
 @asset(
     group_name="dq",
-    deps=["lnd_loan"],
+    deps=["lnd_loan","lnd_payment"],
     description="DQ gate for lnd_loan — blocks staging if checks fail",
 )
 def dq_lnd_loan(
-    context: AssetExecutionContext,
+    context,
     duckdb_resource: DuckDBResource,
 ) -> Output:
     start_time      = time.time()

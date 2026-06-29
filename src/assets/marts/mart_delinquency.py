@@ -22,7 +22,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from dagster import asset, AssetExecutionContext, Output, MetadataValue
+from dagster import asset, Output, MetadataValue
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -39,7 +39,7 @@ logger = get_logger(__name__)
     description="Q1: 30-day delinquency rate by loan product type",
 )
 def mart_delinquency(
-    context: AssetExecutionContext,
+    context,
     duckdb_resource: DuckDBResource,
 ) -> Output:
     start_time     = time.time()

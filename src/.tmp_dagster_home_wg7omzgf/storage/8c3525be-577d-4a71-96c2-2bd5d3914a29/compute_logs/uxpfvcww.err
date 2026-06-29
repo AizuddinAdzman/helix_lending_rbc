@@ -1,0 +1,20 @@
+[32m2026-06-28 23:29:54 +0800[0m - dagster - [34mDEBUG[0m - __ASSET_JOB - 8c3525be-577d-4a71-96c2-2bd5d3914a29 - 45321 - LOGS_CAPTURED - Started capturing logs in process (pid: 45321).
+[32m2026-06-28 23:29:54 +0800[0m - dagster - [34mDEBUG[0m - __ASSET_JOB - 8c3525be-577d-4a71-96c2-2bd5d3914a29 - 45321 - raw_loan - STEP_START - Started execution of step "raw_loan".
+[32m2026-06-28 23:29:54 +0800[0m - dagster - [34mERROR[0m - [31m__ASSET_JOB - 8c3525be-577d-4a71-96c2-2bd5d3914a29 - 45321 - raw_loan - STEP_FAILURE - Execution of step "raw_loan" failed.
+
+dagster._core.errors.DagsterExecutionStepExecutionError: Error occurred while executing op "raw_loan"::
+
+FileNotFoundError: Source file not found: /Users/aizuddinadzman/Library/CloudStorage/OneDrive-Personal/Documents/GitHub/helix_lending_rbc/data/loan.csv
+
+Stack Trace:
+  File "/Users/aizuddinadzman/Library/CloudStorage/OneDrive-Personal/Documents/GitHub/helix_lending_rbc/venv/lib/python3.9/site-packages/dagster/_core/execution/plan/utils.py", line 57, in op_execution_error_boundary
+    yield
+  File "/Users/aizuddinadzman/Library/CloudStorage/OneDrive-Personal/Documents/GitHub/helix_lending_rbc/venv/lib/python3.9/site-packages/dagster/_utils/__init__.py", line 392, in iterate_with_context
+    next_output = next(iterator)
+  File "/Users/aizuddinadzman/Library/CloudStorage/OneDrive-Personal/Documents/GitHub/helix_lending_rbc/venv/lib/python3.9/site-packages/dagster/_core/execution/plan/compute_generator.py", line 137, in _coerce_op_compute_fn_to_iterator
+    result = invoke_compute_fn(
+  File "/Users/aizuddinadzman/Library/CloudStorage/OneDrive-Personal/Documents/GitHub/helix_lending_rbc/venv/lib/python3.9/site-packages/dagster/_core/execution/plan/compute_generator.py", line 117, in invoke_compute_fn
+    return fn(context, **args_to_pass) if context_arg_provided else fn(**args_to_pass)
+  File "/Users/aizuddinadzman/Library/CloudStorage/OneDrive-Personal/Documents/GitHub/helix_lending_rbc/src/assets/ingestion/raw_loan.py", line 121, in raw_loan
+    raise FileNotFoundError(f"Source file not found: {LOAN_FILE}")
+[0m

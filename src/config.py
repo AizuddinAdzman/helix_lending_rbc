@@ -6,10 +6,13 @@ All paths, constants, thresholds, and tuneable parameters live here.
 Nothing is hardcoded in individual asset files.
 """
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
 from datetime import date, timezone
 from dateutil.relativedelta import relativedelta
+from typing import Tuple
 
 # ---------------------------------------------------------------------------
 # Project root — resolved relative to this file so the project is portable
@@ -20,8 +23,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # Source data paths
 # ---------------------------------------------------------------------------
 DATA_DIR        = PROJECT_ROOT / "data"
-LOAN_FILE       = DATA_DIR / "loan.csv"
-PAYMENT_FILE    = DATA_DIR / "payment.jsonl"
+LOAN_FILE       = DATA_DIR / "loans.csv"
+PAYMENT_FILE    = DATA_DIR / "payments.jsonl"
 
 # ---------------------------------------------------------------------------
 # Database
@@ -45,7 +48,7 @@ DQ_MAX_NULL_RATE        = 0.10          # warn if any column null rate > 10%
 # dim_date spine — 80 years centred on today()
 # Recomputed at runtime so the spine is always current.
 # ---------------------------------------------------------------------------
-def get_dim_date_bounds() -> tuple[date, date]:
+def get_dim_date_bounds() -> Tuple[date, date]:
     """Return (lower, upper) bounds for the dim_date spine."""
     today = date.today()
     lower = today - relativedelta(years=40)

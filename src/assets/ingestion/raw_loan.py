@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from dagster import asset, AssetExecutionContext, Output, MetadataValue
+from dagster import asset, Output, MetadataValue
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -91,7 +91,7 @@ EXPECTED_COLUMNS = [
     description="Ingest loan.csv → raw_loan (all VARCHAR, append per batch)",
 )
 def raw_loan(
-    context: AssetExecutionContext,
+    context,
     duckdb_resource: DuckDBResource,
 ) -> Output:
     """

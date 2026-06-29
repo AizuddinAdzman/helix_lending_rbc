@@ -25,7 +25,7 @@ Columns:
 import time
 from datetime import datetime, timezone, date, timedelta
 
-from dagster import asset, AssetExecutionContext, Output, MetadataValue
+from dagster import asset, Output, MetadataValue
 
 import sys
 from pathlib import Path
@@ -48,11 +48,11 @@ DAY_NAMES = [
 
 @asset(
     group_name="transformation",
-    deps=["stg_loan_payment"],
+    deps=["stg_loan_payment","dim_customer"],
     description="Date spine: today − 40y to today + 40y (80 years, ~29,200 rows)",
 )
 def dim_date(
-    context: AssetExecutionContext,
+    context,
     duckdb_resource: DuckDBResource,
 ) -> Output:
     start_time     = time.time()

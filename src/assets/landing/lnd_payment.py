@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from dagster import asset, AssetExecutionContext, Output, MetadataValue
+from dagster import asset, Output, MetadataValue
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -60,11 +60,11 @@ CREATE TABLE IF NOT EXISTS lnd_payment (
 
 @asset(
     group_name="landing",
-    deps=["raw_payment"],
+    deps=["raw_payment", "lnd_loan"],
     description="raw_payment → lnd_payment (typed, UTC timestamps, deduped on payment_id)",
 )
 def lnd_payment(
-    context: AssetExecutionContext,
+    context,
     duckdb_resource: DuckDBResource,
 ) -> Output:
     start_time      = time.time()

@@ -19,12 +19,15 @@ Design decision:
     Grain: one row per customer_id (deduped on latest origination_date).
 """
 
+from __future__ import annotations
+
 import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
-from dagster import asset, AssetExecutionContext, Output, MetadataValue
+from dagster import asset, Output, MetadataValue
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -53,7 +56,7 @@ CREATE OR REPLACE TABLE dim_customer (
     description="Flatten borrower_info JSON → dim_customer (one row per customer)",
 )
 def dim_customer(
-    context: AssetExecutionContext,
+    context,
     duckdb_resource: DuckDBResource,
 ) -> Output:
     start_time     = time.time()
@@ -136,7 +139,7 @@ def dim_customer(
     return Output(value={"rows_inserted": rows_inserted})
 
 
-def _parse_borrower_info(raw: str | None, customer_id: str) -> dict:
+def _parse_borrower_info(raw: Optional[str], customer_id: str) -> dict:
     """
     Parse borrower_info JSON string.
     Returns dict with keys: credit_score, employment, annual_income, years_employed.
@@ -162,15 +165,16 @@ def _parse_borrower_info(raw: str | None, customer_id: str) -> dict:
         }
 
 
-def _safe_int(val) -> int | None:
+def _safe_int(val) -> Optional[int]:
     try:
         return int(val) if val is not None else None
     except (ValueError, TypeError):
         return None
 
 
-def _safe_float(val) -> float | None:
+def _safe_float(val) -> Optional[float]:
     try:
         return float(val) if val is not None else None
     except (ValueError, TypeError):
         return None
+    

@@ -33,7 +33,7 @@ from datetime import datetime, timezone, date
 from pathlib import Path
 from typing import Optional
 
-from dagster import asset, AssetExecutionContext, Output, MetadataValue
+from dagster import asset, Output, MetadataValue
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -83,11 +83,11 @@ HASH_COLUMNS = [
 
 @asset(
     group_name="landing",
-    deps=["raw_loan"],
+    deps=["raw_loan","raw_payment"],
     description="raw_loan → lnd_loan (typed, cleaned, SCD2)",
 )
 def lnd_loan(
-    context: AssetExecutionContext,
+    context,
     duckdb_resource: DuckDBResource,
 ) -> Output:
     start_time      = time.time()

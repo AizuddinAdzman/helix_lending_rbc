@@ -25,7 +25,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from dagster import asset, AssetExecutionContext, Output, MetadataValue
+from dagster import asset, Output, MetadataValue
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -163,7 +163,7 @@ WHERE l.is_current_flag = TRUE
     ),
 )
 def stg_loan_payment(
-    context: AssetExecutionContext,
+    context,
     duckdb_resource: DuckDBResource,
 ) -> Output:
     start_time     = time.time()

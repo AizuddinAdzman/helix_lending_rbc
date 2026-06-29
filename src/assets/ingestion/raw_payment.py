@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Any
 
-from dagster import asset, AssetExecutionContext, Output, MetadataValue
+from dagster import asset, Output, MetadataValue
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -87,10 +87,11 @@ CREATE TABLE IF NOT EXISTS err_payment (
 
 @asset(
     group_name="ingestion",
+    deps=["raw_loan"],
     description="Ingest payment.jsonl → raw_payment (flattened, all VARCHAR, append per batch)",
 )
 def raw_payment(
-    context: AssetExecutionContext,
+    context,
     duckdb_resource: DuckDBResource,
 ) -> Output:
     """
