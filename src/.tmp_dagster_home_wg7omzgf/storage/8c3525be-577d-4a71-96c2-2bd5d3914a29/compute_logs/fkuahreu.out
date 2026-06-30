@@ -1,1 +1,0 @@
-{"timestamp": "2026-06-28T15:29:54.188454+00:00", "level": "INFO", "logger": "assets.ingestion.raw_payment", "message": "Starting raw_payment ingestion from payment.jsonl", "layer": "raw", "table": "raw_payment", "event": "load_start", "source_file": "payment.jsonl", "batch_date": "2026-06-28"}

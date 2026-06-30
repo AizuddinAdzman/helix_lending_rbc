@@ -562,8 +562,8 @@ def _create_lnd_tables(conn):
             amount DECIMAL(18,2), payment_timestamp TIMESTAMPTZ,
             payment_method_type VARCHAR, payment_method_last_four VARCHAR,
             payment_method_bank VARCHAR, metadata_source VARCHAR,
-            metadata_user_agent VARCHAR, _source_file VARCHAR,
-            _last_updated_ts TIMESTAMP
+            metadata_user_agent VARCHAR, payment_allocation_status VARCHAR,
+            _source_file VARCHAR, _last_updated_ts TIMESTAMP
         )""")
 
 
@@ -659,13 +659,14 @@ def _transform_lnd_payment(conn, batch_ts):
             continue
         sk += 1
         conn.execute(
-            "INSERT INTO hlx_dev_lnd.lnd_payment VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO hlx_dev_lnd.lnd_payment VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [sk, pid, clean_string(d.get("loan_id")), amount, ts,
              normalise_category(d.get("payment_method_type")),
              clean_string(d.get("payment_method_last_four")),
              clean_string(d.get("payment_method_bank")),
              clean_string(d.get("metadata_source")),
              clean_string(d.get("metadata_user_agent")),
+             "allocated",  # payment_allocation_status placeholder for E2E
              d.get("_source_file"), d.get("_last_updated_ts")]
         )
         existing_ids.add(pid)

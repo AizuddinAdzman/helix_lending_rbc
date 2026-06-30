@@ -55,6 +55,9 @@ def mart_delinquency(context, duckdb_resource: DuckDBResource) -> Output:
                 CURRENT_TIMESTAMP                   AS _last_updated_ts
             FROM {TBL_FCT_LOAN}
             WHERE loan_status = 'active'
+              AND loan_balance_type = 'debit_balance'
+            -- Credit balance loans cannot be delinquent by definition —
+            -- the lender owes the customer money, not the other way around.
             GROUP BY product_type
             ORDER BY delinquency_rate_pct DESC
         """)

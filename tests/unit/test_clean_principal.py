@@ -73,16 +73,24 @@ class TestCleanPrincipalAmount:
         assert clean_principal_amount("   ") is None
 
     # ------------------------------------------------------------------
-    # Error cases
+    # Negative values — accepted as credit balances (Option B)
+    # Negative principal = overpayment, escrow refund, lender correction
+    # Classified as loan_balance_type='credit_balance' at staging layer
     # ------------------------------------------------------------------
 
-    def test_negative_value_raises(self):
-        with pytest.raises(ValueError, match="Negative"):
-            clean_principal_amount("-100.00")
+    def test_negative_value_accepted(self):
+        """Negative principal is valid — represents a credit balance."""
+        assert clean_principal_amount("-100.00") == -100.0
 
-    def test_negative_with_currency_raises(self):
-        with pytest.raises(ValueError, match="Negative"):
-            clean_principal_amount("-$100.00")
+    def test_negative_with_currency_accepted(self):
+        """Negative with currency symbol also valid."""
+        assert clean_principal_amount("-$100.00") == -100.0
+
+    def test_negative_large_amount(self):
+        assert clean_principal_amount("-$1,250.00") == -1250.0
+
+    def test_negative_small_amount(self):
+        assert clean_principal_amount("-5000.00") == -5000.0
 
     def test_non_numeric_raises(self):
         with pytest.raises(ValueError, match="Cannot parse"):

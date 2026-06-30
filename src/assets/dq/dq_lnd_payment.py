@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from config import (
     DQ_ACCEPTANCE_THRESHOLD, DQ_MAX_NULL_RATE,
-    TBL_RAW_LOAN, TBL_RAW_PAYMENT, TBL_LND_LOAN, TBL_LND_PAYMENT,
+    TBL_RAW_PAYMENT, TBL_LND_PAYMENT,
     TBL_LND_ERR_PAYMENT, TBL_LND_DQ_AUDIT, SCHEMA_LND,
 )
 from resources.duckdb_resource import DuckDBResource
@@ -151,47 +151,56 @@ def dq_lnd_payment(context, duckdb_resource: DuckDBResource) -> Output:
             "WARN" if invalid > 0 else "PASS", float(invalid), 0.0,
             False, f"{invalid} unrecognised payment methods"))
 
-        # CHECK 5a: Referential integrity — true orphans (loan_id not in raw_loan at all)
-        # These are genuine RI violations — payment references a loan that never existed.
-        true_orphans = conn.execute(f"""
-            SELECT COUNT(*) FROM {TBL_LND_PAYMENT} p
-            WHERE p.loan_id IS NOT NULL
-              AND NOT EXISTS (
-                  SELECT 1 FROM {TBL_RAW_LOAN} r WHERE r.loan_id = p.loan_id
-              )""").fetchone()[0]
-        ri_breach = true_orphans > 0
-        dq_records.append(_rec(run_id, TBL_LND_PAYMENT, "referential_integrity_true_orphan",
-            "FAIL" if ri_breach else "PASS", float(true_orphans), 0.0,
-            ri_breach, f"{true_orphans} payments reference loan_ids not in raw_loan"))
-        if ri_breach:
-            breaches.append(f"Referential integrity: {true_orphans} payments reference unknown loans")
-            log_event(logger, event="dq_fail", layer="dq", table=TBL_LND_PAYMENT,
-                      message=breaches[-1], batch_date=batch_date_str, level="ERROR")
+        # CHECK 5: Payment allocation status summary (INFO — no breach)
+        # Payments are categorised by their relationship to the loan universe.
+        # None of these categories halt the pipeline — they inform investigation.
+        #
+        # allocated     : loan clean in lnd_loan              → fully reportable
+        # unallocated   : loan_id not in raw_loan at all      → pre-loan / cross-system
+        # loan_rejected : loan in raw but failed lnd cleaning  → investigate lnd_err_loan
+        # unidentified  : loan_id is NULL                      → no loan reference
 
-        # CHECK 5b: Referential integrity — rejected loans (loan_id in lnd_err_loan)
-        # Warning only — loan exists in source but failed lnd_ cleaning.
-        # Payments are legitimate; the loan record needs investigation.
-        rejected_loan_payments = conn.execute(f"""
-            SELECT COUNT(*) FROM {TBL_LND_PAYMENT} p
-            WHERE p.loan_id IS NOT NULL
-              AND NOT EXISTS (
-                  SELECT 1 FROM {TBL_LND_LOAN} l WHERE l.loan_id = p.loan_id
-              )
-              AND EXISTS (
-                  SELECT 1 FROM {TBL_RAW_LOAN} r WHERE r.loan_id = p.loan_id
-              )""").fetchone()[0]
-        dq_records.append(_rec(run_id, TBL_LND_PAYMENT, "referential_integrity_rejected_loan",
-            "WARN" if rejected_loan_payments > 0 else "PASS",
-            float(rejected_loan_payments), 0.0, False,
-            f"{rejected_loan_payments} payments whose loan was rejected at landing — investigate lnd_err_loan"))
-        if rejected_loan_payments > 0:
+        alloc_counts = conn.execute(f"""
+            SELECT
+                payment_allocation_status,
+                COUNT(*) cnt
+            FROM {TBL_LND_PAYMENT}
+            GROUP BY payment_allocation_status
+        """).fetchall()
+
+        alloc_map = {row[0]: row[1] for row in alloc_counts}
+        allocated      = alloc_map.get("allocated",      0)
+        unallocated    = alloc_map.get("unallocated",    0)
+        loan_rejected  = alloc_map.get("loan_rejected",  0)
+        unidentified   = alloc_map.get("unidentified",   0)
+
+        summary = (
+            f"allocated={allocated}, unallocated={unallocated}, "
+            f"loan_rejected={loan_rejected}, unidentified={unidentified}"
+        )
+
+        dq_records.append(_rec(run_id, TBL_LND_PAYMENT,
+            "allocation_status_summary", "INFO",
+            float(allocated), float(total_lnd), False, summary))
+
+        log_event(logger, event="checkpoint", layer="dq", table=TBL_LND_PAYMENT,
+                  message=f"Payment allocation: {summary}",
+                  batch_date=batch_date_str, level="INFO")
+
+        if unallocated > 0:
             log_event(logger, event="checkpoint", layer="dq", table=TBL_LND_PAYMENT,
-                      message=(f"RI warning: {rejected_loan_payments} payments reference loans "
-                               f"that failed lnd_loan cleaning — check lnd_err_loan"),
+                      message=(f"{unallocated} unallocated payments (pre-loan / cross-system) "
+                               f"— excluded from reporting via stg JOIN"),
                       batch_date=batch_date_str, level="WARNING")
 
-        # For backward compat — total orphans used in metadata
-        orphans = true_orphans
+        if loan_rejected > 0:
+            log_event(logger, event="checkpoint", layer="dq", table=TBL_LND_PAYMENT,
+                      message=(f"{loan_rejected} payments reference loans rejected at lnd_loan "
+                               f"— investigate hlx_dev_lnd.lnd_err_loan"),
+                      batch_date=batch_date_str, level="WARNING")
+
+        # For metadata output
+        orphans = unallocated
 
         conn.executemany(
             f"INSERT INTO {TBL_LND_DQ_AUDIT} VALUES (?,?,?,?,?,?,?,?,?)",

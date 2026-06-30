@@ -26,26 +26,30 @@ def clean_principal_amount(raw: Optional[str]) -> Optional[float]:
     """
     Strip currency symbols and commas, return float.
 
+    Negative values are accepted — they represent credit balances:
+        Overpayments, escrow refunds, lender corrections, etc.
+    These are classified as loan_balance_type='credit_balance' at staging.
+
     Examples:
-        "$33,517.74" → 33517.74
-        "32256.80"   → 32256.80
-        "33,517"     → 33517.0
-        None / ""    → None
+        "$33,517.74"  → 33517.74   (debit balance)
+        "32256.80"    → 32256.80   (debit balance)
+        "-5000.00"    → -5000.0    (credit balance — accepted)
+        "-$1,250.00"  → -1250.0    (credit balance — accepted)
+        None / ""     → None
+        "not_a_number" → ValueError
     """
     if raw is None or str(raw).strip() == "":
         return None
     raw_stripped = str(raw).strip()
 
-    # Check for negative sign BEFORE stripping currency symbols
-    # Handles: "-100.00", "-$100.00", "$ -100.00"
-    stripped_for_sign = re.sub(r"[\$,\s]", "", raw_stripped)
-    if stripped_for_sign.startswith("-"):
-        raise ValueError(f"Negative principal amount: {raw!r}")
+    # Strip currency symbols and whitespace before parsing
+    cleaned = re.sub(r"[\$,\s]", "", raw_stripped)
 
-    cleaned = stripped_for_sign
+    if not cleaned or cleaned == "-":
+        return None
+
     try:
-        value = float(cleaned)
-        return value
+        return float(cleaned)
     except ValueError:
         raise ValueError(f"Cannot parse principal_amount: {raw!r}")
 

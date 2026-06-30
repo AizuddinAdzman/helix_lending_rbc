@@ -53,6 +53,9 @@ def mart_payment_anomaly(context, duckdb_resource: DuckDBResource) -> Output:
                 CURRENT_TIMESTAMP AS _last_updated_ts
             FROM {TBL_FCT_PAYMENT} p
             WHERE p.is_payment_anomalous = TRUE
+              AND p.loan_status != 'credit_balance'
+            -- EMI comparison is undefined for credit balance loans.
+            -- Exclude them from anomaly detection to avoid false positives.
             ORDER BY deviation_pct DESC
         """)
 

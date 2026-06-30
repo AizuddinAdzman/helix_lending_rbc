@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from config import (
     TBL_RAW_LOAN, TBL_RAW_PAYMENT, TBL_RAW_AUDIT,
+    TBL_LND_PAYMENT,
     TBL_LND_ERR_LOAN, TBL_LND_ERR_PAYMENT, TBL_LND_DQ_AUDIT,
     TBL_LND_LOAN, TBL_LND_PAYMENT,
     TBL_FCT_LOAN, TBL_FCT_PAYMENT,
@@ -78,6 +79,10 @@ def mart_data_observability(context, duckdb_resource: DuckDBResource) -> Output:
                 fct_rows                    INTEGER,
                 latest_batch_ts             TIMESTAMP,
                 freshness_hours             DECIMAL(8,2),
+                payments_allocated          INTEGER,
+                payments_unallocated        INTEGER,
+                payments_loan_rejected      INTEGER,
+                payments_unidentified       INTEGER,
                 pipeline_status             VARCHAR,
                 _last_updated_ts            TIMESTAMP
             )""")
@@ -129,12 +134,28 @@ def mart_data_observability(context, duckdb_resource: DuckDBResource) -> Output:
             true_dup_count  = audit_row[2] if audit_row else None
             diff_amt_count  = audit_row[3] if audit_row else None
 
+            # Allocation breakdown for payment source
+            alloc_allocated = alloc_unallocated = alloc_loan_rejected = alloc_unidentified = None
+            if src["name"] == "payment" and _exists(conn, TBL_LND_PAYMENT):
+                rows = conn.execute(
+                    f"SELECT payment_allocation_status, COUNT(*) cnt "
+                    f"FROM {TBL_LND_PAYMENT} "
+                    f"GROUP BY payment_allocation_status"
+                ).fetchall()
+                alloc_map = {r[0]: r[1] for r in rows}
+                alloc_allocated      = alloc_map.get("allocated",     0)
+                alloc_unallocated    = alloc_map.get("unallocated",   0)
+                alloc_loan_rejected  = alloc_map.get("loan_rejected", 0)
+                alloc_unidentified   = alloc_map.get("unidentified",  0)
+
             conn.execute(
-                f"INSERT INTO {TBL_MART_OBSERVABILITY} VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                """INSERT INTO """ + TBL_MART_OBSERVABILITY + """ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 [batch_date_str, src["name"],
                  raw_n, distinct_keys, dup_key_count, true_dup_count, diff_amt_count,
                  acc, err_n, rate,
-                 dq_t, dq_f, dq_f > 0, fct_n, lt, fh, status, batch_ts],
+                 dq_t, dq_f, dq_f > 0, fct_n, lt, fh,
+                 alloc_allocated, alloc_unallocated, alloc_loan_rejected, alloc_unidentified,
+                 status, batch_ts],
             )
             log_event(
                 logger, event="checkpoint", layer="mart",

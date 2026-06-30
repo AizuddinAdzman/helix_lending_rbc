@@ -112,6 +112,7 @@ TABLES = [
             payment_method_bank       VARCHAR,
             metadata_source           VARCHAR,
             metadata_user_agent       VARCHAR,
+            payment_allocation_status VARCHAR,
             _source_file              VARCHAR,
             _last_updated_ts          TIMESTAMP
         )"""),
@@ -187,6 +188,7 @@ TABLES = [
             final_due_date            DATE,
             is_delinquent             BOOLEAN,
             is_payment_anomalous      BOOLEAN,
+            loan_balance_type         VARCHAR,
             _last_updated_ts          TIMESTAMP
         )"""),
     # ── DIMENSIONS ───────────────────────────────────────────────────────────
@@ -228,6 +230,7 @@ TABLES = [
             origination_date_id     INTEGER,
             origination_channel     VARCHAR,
             loan_status             VARCHAR,
+            loan_balance_type       VARCHAR,
             expected_emi            DECIMAL(18,2),
             final_due_date          DATE,
             is_delinquent           BOOLEAN,
@@ -289,20 +292,28 @@ TABLES = [
         )"""),
     (TBL_MART_OBSERVABILITY, f"""
         CREATE TABLE IF NOT EXISTS {TBL_MART_OBSERVABILITY} (
-            run_date              DATE,
-            source_name           VARCHAR,
-            raw_rows_in_batch     INTEGER,
-            lnd_rows_accepted     INTEGER,
-            lnd_rows_rejected     INTEGER,
-            acceptance_rate_pct   DECIMAL(6,2),
-            dq_checks_run         INTEGER,
-            dq_checks_failed      INTEGER,
-            dq_breach_flag        BOOLEAN,
-            fct_rows              INTEGER,
-            latest_batch_ts       TIMESTAMP,
-            freshness_hours       DECIMAL(8,2),
-            pipeline_status       VARCHAR,
-            _last_updated_ts      TIMESTAMP
+            run_date                 DATE,
+            source_name              VARCHAR,
+            raw_rows_in_batch        INTEGER,
+            raw_distinct_keys        INTEGER,
+            raw_duplicate_key_count  INTEGER,
+            raw_true_duplicate_count INTEGER,
+            raw_diff_amount_same_id  INTEGER,
+            lnd_rows_accepted        INTEGER,
+            lnd_rows_rejected        INTEGER,
+            acceptance_rate_pct      DECIMAL(6,2),
+            dq_checks_run            INTEGER,
+            dq_checks_failed         INTEGER,
+            dq_breach_flag           BOOLEAN,
+            fct_rows                 INTEGER,
+            latest_batch_ts          TIMESTAMP,
+            freshness_hours          DECIMAL(8,2),
+            payments_allocated       INTEGER,
+            payments_unallocated     INTEGER,
+            payments_loan_rejected   INTEGER,
+            payments_unidentified    INTEGER,
+            pipeline_status          VARCHAR,
+            _last_updated_ts         TIMESTAMP
         )"""),
 ]
 

@@ -87,6 +87,16 @@ def stg_loan_payment(context, duckdb_resource: DuckDBResource) -> Output:
                     ELSE ABS(p.amount - ({emi_expr}))
                          / NULLIF(({emi_expr}), 0) > {EMI_TOLERANCE_PCT}
                 END AS is_payment_anomalous,
+                -- Derived: loan balance type
+                -- Negative principal = credit balance (overpayment, refund, correction)
+                -- Zero = settled / zero balance
+                -- Positive = standard debit balance
+                CASE
+                    WHEN l.principal_amount < 0 THEN 'credit_balance'
+                    WHEN l.principal_amount = 0 THEN 'zero_balance'
+                    ELSE                             'debit_balance'
+                END                                 AS loan_balance_type,
+
                 CURRENT_TIMESTAMP AS _last_updated_ts
             FROM {TBL_LND_LOAN} l
             LEFT JOIN {TBL_LND_PAYMENT} p ON l.loan_id = p.loan_id

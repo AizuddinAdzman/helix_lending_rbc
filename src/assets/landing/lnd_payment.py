@@ -27,7 +27,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from config import (
     COL_LAST_UPDATED_TS,
-    TBL_RAW_PAYMENT, TBL_LND_PAYMENT, TBL_LND_ERR_PAYMENT, SCHEMA_LND,
+    TBL_RAW_LOAN, TBL_RAW_PAYMENT,
+    TBL_LND_LOAN, TBL_LND_ERR_LOAN,
+    TBL_LND_PAYMENT, TBL_LND_ERR_PAYMENT, SCHEMA_LND,
 )
 from resources.duckdb_resource import DuckDBResource
 from utils.cleaners import parse_timestamp_utc, normalise_category, clean_string
@@ -72,6 +74,7 @@ def lnd_payment(context, duckdb_resource: DuckDBResource) -> Output:
                 payment_method_bank       VARCHAR,
                 metadata_source           VARCHAR,
                 metadata_user_agent       VARCHAR,
+                payment_allocation_status VARCHAR,
                 _source_file              VARCHAR,
                 _last_updated_ts          TIMESTAMP
             )""")
@@ -228,6 +231,12 @@ def lnd_payment(context, duckdb_resource: DuckDBResource) -> Output:
                 continue
 
             sk += 1
+            # Determine payment allocation status
+            alloc_status = _get_allocation_status(
+                conn, clean_string(payment_id),
+                clean_string(loan_id)
+            )
+
             to_insert.append([
                 sk,
                 clean_string(payment_id),
@@ -238,13 +247,14 @@ def lnd_payment(context, duckdb_resource: DuckDBResource) -> Output:
                 clean_string(payment_method_bank),
                 clean_string(metadata_source),
                 clean_string(metadata_user_agent),
+                alloc_status,
                 source_file, last_updated_ts,
             ])
             existing_composites.add(composite)
 
         if to_insert:
             conn.executemany(
-                f"INSERT INTO {TBL_LND_PAYMENT} VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                f"INSERT INTO {TBL_LND_PAYMENT} VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 to_insert,
             )
             rows_inserted = len(to_insert)
@@ -279,3 +289,35 @@ def lnd_payment(context, duckdb_resource: DuckDBResource) -> Output:
         "rows_rejected": rows_rejected,
         "split_settlement_rows": rows_split_settlement,
     })
+
+
+def _get_allocation_status(conn, payment_id: str, loan_id) -> str:
+    """
+    Determine payment allocation status.
+
+    allocated     : loan_id exists and is clean in lnd_loan
+    unallocated   : loan_id not in raw_loan at all (pre-loan, cross-system)
+    loan_rejected : loan_id in raw_loan but rejected during cleaning (lnd_err_loan)
+    unidentified  : loan_id is NULL — no loan reference in source
+    """
+    if loan_id is None:
+        return "unidentified"
+
+    # Check if loan is clean in lnd_loan
+    in_lnd = conn.execute(
+        f"SELECT COUNT(*) FROM {TBL_LND_LOAN} WHERE loan_id = ? AND is_current_flag = TRUE",
+        [loan_id]
+    ).fetchone()[0]
+    if in_lnd > 0:
+        return "allocated"
+
+    # Check if loan exists in raw_loan (was it ever seen?)
+    in_raw = conn.execute(
+        f"SELECT COUNT(*) FROM {TBL_RAW_LOAN} WHERE loan_id = ?",
+        [loan_id]
+    ).fetchone()[0]
+    if in_raw == 0:
+        return "unallocated"
+
+    # Loan exists in raw but not in lnd — must have been rejected
+    return "loan_rejected"

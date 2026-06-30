@@ -45,8 +45,8 @@ def fct_loan(context, duckdb_resource: DuckDBResource) -> Output:
                 s.principal_amount, s.interest_rate, s.term_months,
                 s.origination_date,
                 d.date_id                   AS origination_date_id,
-                s.origination_channel, s.loan_status, s.expected_emi,
-                s.final_due_date, s.is_delinquent,
+                s.origination_channel, s.loan_status, s.loan_balance_type,
+                s.expected_emi, s.final_due_date, s.is_delinquent,
                 MAX(s.payment_amount)       AS last_payment_amount,
                 MAX(s.payment_timestamp)    AS last_payment_timestamp,
                 MIN(s.days_since_payment)   AS days_since_last_payment,
@@ -61,7 +61,7 @@ def fct_loan(context, duckdb_resource: DuckDBResource) -> Output:
                 s.loan_id, s.customer_id, s.product_type,
                 s.principal_amount, s.interest_rate, s.term_months,
                 s.origination_date, d.date_id, s.origination_channel,
-                s.loan_status, s.expected_emi, s.final_due_date, s.is_delinquent,
+                s.loan_status, s.loan_balance_type, s.expected_emi, s.final_due_date, s.is_delinquent,
                 c.credit_score, c.employment_type, c.annual_income
         """)
 
